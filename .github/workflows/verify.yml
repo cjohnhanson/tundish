@@ -21,6 +21,8 @@ jobs:
         uses: 'actions/setup-python@v5'
         with:
           'python-version': '3.12'
+      - name: 'uv'
+        uses: 'astral-sh/setup-uv@v6'
       - name: 'install missouri'
         uses: 'cjohnhanson/missouri@main'
       - name: 'gaff'
@@ -36,6 +38,9 @@ jobs:
       - name: 'tests'
         run: |
           cargo test --workspace --all-features
+      - name: 'python tests'
+        run: |
+          uv run --isolated --with pytest pytest -q tests/python
       - name: 'missouri suite'
         run: |
           sh -c '[ -d tests/missouri ] || exit 0; cd tests/missouri && MISSOURI_SANDBOX=preinstalled missouri run'

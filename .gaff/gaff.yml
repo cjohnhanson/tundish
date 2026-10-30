@@ -55,6 +55,8 @@ github:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: uv
+        uses: astral-sh/setup-uv@v6
       - name: install missouri
         uses: cjohnhanson/missouri@main
       - name: gaff
@@ -78,6 +80,8 @@ github:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: uv
+        uses: astral-sh/setup-uv@v6
       - name: install missouri
         uses: cjohnhanson/missouri@main
       # `run: false`, because this action runs `gaff ci` by default and
@@ -93,6 +97,8 @@ github:
         command: [cargo, clippy, --workspace, --all-targets, --all-features, --, -D, warnings]
       - name: tests
         command: [cargo, test, --workspace, --all-features]
+      - name: python tests
+        command: [uv, run, --isolated, --with, pytest, pytest, -q, tests/python]
       # MISSOURI_SANDBOX=preinstalled, because a runner has no nix and
       # the action installs the packages the suites declare. Without it
       # missouri refuses: "nix sandbox configured but `nix` binary not

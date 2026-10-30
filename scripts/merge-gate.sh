@@ -69,6 +69,18 @@ if [ -z "${MERGE_GATE_SKIP_TESTS:-}" ] || [ -z "${CARGO:-}" ]; then
 		printf '%s\n' "$test_out" | tail -40 >&2
 		exit 1
 	}
+	# The wheel is a shipped path of its own, so its tests gate too.
+	command -v uv >/dev/null || {
+		echo "merge-gate: uv is not on PATH, so the Python tests cannot run." >&2
+		echo "  https://docs.astral.sh/uv/getting-started/installation/" >&2
+		exit 1
+	}
+	echo "merge-gate: python tests"
+	py_out=$(uv run --isolated --with pytest pytest -q tests/python 2>&1 </dev/null) || {
+		echo "merge-gate: the Python tests failed. Nothing merges on red tests." >&2
+		printf '%s\n' "$py_out" | tail -40 >&2
+		exit 1
+	}
 fi
 
 # The CI runner has no nix, but it preinstalls the packages the
