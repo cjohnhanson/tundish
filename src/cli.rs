@@ -177,12 +177,11 @@ enum StartArg {
 /// What `prime` prints. A pure function of the binary.
 #[must_use]
 pub fn prime() -> String {
-    // Placeholder model text; the copy pass replaces the second
-    // paragraph. The shape is the contract and the test checks it.
+    // The shape is the contract and the test checks it.
     [
         "# tundish",
         ABOUT,
-        "An item is JSON in a named queue with an id. A subscription selects, filters, and renders items with jaq; each subscriber has its own cursor. An ack by id is first-wins: a later ack by another subscriber exits 3 and names the owner. The database is one SQLite file; --db names one.",
+        "Programs publish JSON items into named queues in one SQLite file. A subscription filters and renders items; a cursor records subscriber progress. A pull prints a batch, then commits delivery. Within a subscription, an ack exits 3 if another subscriber has acked the item or holds its lease.",
         "Commands:",
         "  tundish publish <queue> [--key <k>] [<json>]",
         "  tundish subscribe <name> --as <subscriber> [--queue <q>]",
