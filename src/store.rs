@@ -295,6 +295,7 @@ impl Store {
             // A share one subscription has one position for all its
             // subscribers, fixed when it is created or moved.
             let start = start_position(&tx, r)?;
+            let old_share = load_rules(&tx, name).ok().map(|o| o.share);
             let old: Option<String> = tx
                 .query_row(
                     "SELECT queue FROM subscriptions WHERE name = ?1",
@@ -313,6 +314,24 @@ impl Store {
                 Some(q) if q == r.queue => Change::Replaced,
                 Some(q) => Change::Moved { from: q },
             };
+            if change == Change::Replaced && old_share != Some(r.share) {
+                // Each share mode keeps its own position; carry the
+                // read position across so no item comes back.
+                match r.share {
+                    Share::One => tx.execute(
+                        "UPDATE subscriptions SET lwm = coalesce(
+                           (SELECT min(cursor) FROM subscribers WHERE subscription = ?1), lwm)
+                         WHERE name = ?1",
+                        [name],
+                    )?,
+                    Share::All => tx.execute(
+                        "UPDATE subscribers SET cursor = max(cursor,
+                           (SELECT lwm FROM subscriptions WHERE name = ?1))
+                         WHERE subscription = ?1",
+                        [name],
+                    )?,
+                };
+            }
             if matches!(change, Change::Moved { .. }) {
                 tx.execute(
                     "UPDATE subscriptions SET lwm = ?2 WHERE name = ?1",
@@ -796,9 +815,8 @@ fn pull_in(
             break;
         }
     }
-    if latest {
-        candidates.reverse();
-    }
+    // `latest` candidates are newest first, so the budget keeps the
+    // newest; the lines are printed oldest first below.
     if rules.consume == Consume::OnAck && rules.share == Share::All {
         notes.open = count_open(tx, name, &rules, filter.as_ref(), origin, cursor)?;
     }
@@ -807,7 +825,8 @@ fn pull_in(
     let reserve = footer(&rules, name, subscriber, &notes, true, true).len();
     let room = budget.saturating_sub(reserve);
     let limit = rules.limit.unwrap_or(usize::MAX);
-    let mut text = String::new();
+    let mut lines: Vec<String> = Vec::new();
+    let mut used = 0;
     let mut delivered: Vec<i64> = Vec::new();
     let mut stopped = false;
     for row in &candidates {
@@ -817,7 +836,7 @@ fn pull_in(
         }
         let mut line = render(template.as_ref(), row)?;
         line.push('\n');
-        if text.len() + line.len() > room {
+        if used + line.len() > room {
             if delivered.is_empty() && may_cut && room > 0 {
                 line = cut(&line, room, row.id);
             } else {
@@ -825,10 +844,18 @@ fn pull_in(
                 break;
             }
         }
-        text.push_str(&line);
+        used += line.len();
+        lines.push(line);
         delivered.push(row.id);
     }
-    let more = stopped || (window_full && !latest);
+    if latest {
+        lines.reverse();
+        delivered.reverse();
+    }
+    let mut text = lines.concat();
+    // A `latest` pull skips older items by design, so a budget stop
+    // there has nothing to pull again.
+    let more = !latest && (stopped || window_full);
 
     // Record the delivery.
     match rules.share {

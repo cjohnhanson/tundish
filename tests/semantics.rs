@@ -420,6 +420,48 @@ fn a_due_pull_does_not_starve_later_subscriptions() {
 }
 
 #[test]
+fn latest_under_a_tight_budget_keeps_the_newest() {
+    let (_d, mut s) = store();
+    let mut r = Rules::new("q");
+    r.select = Select::Latest;
+    r.limit = Some(3);
+    s.subscribe("feed", "a", Some(r), 0).unwrap();
+    let p: Vec<i64> = (0..5)
+        .map(|i| {
+            s.publish(
+                "q",
+                None,
+                &json!({"n": i, "pad": "x".repeat(40)}),
+                1,
+                Retention::default(),
+            )
+            .unwrap()
+        })
+        .collect();
+    let mut opts = PullOpts::at(2);
+    opts.max_bytes = 160;
+    let out = pull_with(&mut s, "feed", "a", opts);
+    assert_eq!(ids(&out), p[3..].to_vec(), "{out}");
+    assert!(!out.contains("pull again"), "{out}");
+}
+
+#[test]
+fn changing_share_on_the_same_queue_keeps_positions() {
+    let (_d, mut s) = store();
+    s.subscribe("feed", "a", Some(Rules::new("q")), 0).unwrap();
+    publish(&mut s, "q", 3, 1);
+    assert_eq!(ids(&pull(&mut s, "feed", "a", 2)).len(), 3);
+    let mut one = Rules::new("q");
+    one.share = Share::One;
+    s.subscribe("feed", "a", Some(one), 3).unwrap();
+    let next = publish(&mut s, "q", 1, 4);
+    assert_eq!(ids(&pull(&mut s, "feed", "a", 5)), next, "all to one");
+    s.subscribe("feed", "a", Some(Rules::new("q")), 6).unwrap();
+    let last = publish(&mut s, "q", 1, 7);
+    assert_eq!(ids(&pull(&mut s, "feed", "a", 8)), last, "one to all");
+}
+
+#[test]
 fn pull_due_commits_every_subscription_or_none() {
     let (_d, mut s) = store();
     s.subscribe("one", "a", Some(Rules::new("q1")), 0).unwrap();
