@@ -183,9 +183,11 @@ one transaction and one byte budget across all subscriptions. It commits
 all delivery changes or none. A subscriber with no bound subscriptions
 gets exit 2 from `pull --due` and the error
 `tundish: <who> holds no subscription, so nothing can be due: tundish subscribe <name> --as <who>`.
-This catches a typo in `--as` in a hook. A due pull reserves room for one
-status line per subscription it can pull. Subscriptions that do not fit
-print nothing, stay due, and come first on the next due pull.
+This catches a typo in `--as` in a hook. Each due subscription uses the
+budget left by those before it. A subscription with nothing to report
+prints nothing and uses no budget. If its status line and the start of
+one item do not fit, it prints nothing and stays due. It comes first on
+the next due pull.
 
 A pull prints and flushes the batch before committing delivery. A
 failure before commit leaves delivery uncommitted. The next pull can
@@ -224,8 +226,9 @@ tundish: subscription=<name> subscriber=<subscriber> delivered=<N> more=<0|1> un
 | `dropped` | Unread matching items removed by retention since the last report. |
 | `lease` | Seconds the lease holds for a `share one`, `on-ack` batch with delivered items; otherwise 0. |
 
-The pull reserves space for status lines before rendering items. It stops
-at the subscription's item limit, the byte budget, or the scan limit.
+Each subscription counts its own status line against the budget before
+rendering its items. It stops at the subscription's item limit, the byte
+budget, or the scan limit.
 The first matching item is always delivered. If it is too large, the pull
 cuts it to fit and ends it with the full pointer `… tundish show <id>`.
 The cut item counts as delivered. Later items that do not fit wait for

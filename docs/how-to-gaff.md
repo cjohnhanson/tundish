@@ -136,9 +136,10 @@ again under this subscription's `share all` rules.
 The example uses tundish's default 1024-byte pull budget and the same
 `max_bytes` in gaff. If you change one, change the other. tundish includes
 each status line in its budget and never exceeds it. The minimum is
-400 bytes. A due pull reserves room for each subscription's status line;
-subscriptions that do not fit stay due for the next pull. See the
-[pull reference](cli-reference.md#pull) for truncation rules.
+400 bytes. A due pull visits subscriptions least recently delivered first.
+Each uses the budget left by those before it. One busy subscription can
+fill the pull. Another due subscription may report only in a later pull.
+See the [pull reference](cli-reference.md#pull) for truncation rules.
 
 gaff passes `GAFF_TIMEOUT_MS` to the command. If the deadline passes
 before the commit, tundish rolls back and exits 1. gaff discards that
