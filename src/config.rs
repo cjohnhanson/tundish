@@ -75,6 +75,12 @@ impl Config {
         let mut queues = BTreeMap::new();
         for (name, r) in raw.queues {
             let max_age = r.max_age.as_deref().map(duration).transpose()?;
+            if r.max_items.is_some_and(|n| n < 1) {
+                return Err(Error::Usage(format!(
+                    "{}: queues.{name}.max_items must be at least 1",
+                    path.display()
+                )));
+            }
             queues.insert(
                 name,
                 Retention {

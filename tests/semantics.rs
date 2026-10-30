@@ -222,7 +222,7 @@ fn the_byte_budget_stops_before_an_item_that_does_not_fit() {
     s.subscribe("feed", "a", Some(Rules::new("q")), 0).unwrap();
     let p = publish(&mut s, "q", 20, 1);
     let mut opts = PullOpts::at(2);
-    opts.max_bytes = 120;
+    opts.max_bytes = 300;
     let first = ids(&pull_with(&mut s, "feed", "a", opts));
     assert!(!first.is_empty() && first.len() < 20);
     let rest = ids(&pull(&mut s, "feed", "a", 3));

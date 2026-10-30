@@ -38,7 +38,7 @@ impl Expr {
             .run((ctx, input))
             .map(unwrap_valr)
             .collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(|e| Error::Expr(format!("{e:?}")))
+            .map_err(|e| Error::Expr(e.to_string()))
     }
 
     /// jq `select` semantics: true when any output is truthy.

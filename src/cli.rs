@@ -66,15 +66,22 @@ enum Command {
         id: i64,
         #[arg(long = "as")]
         subscriber: String,
+        /// The subscription to ack in; needed when the subscriber holds
+        /// more than one on the item's queue
+        #[arg(long)]
+        subscription: Option<String>,
     },
     /// Print one item as JSON
     Show { id: i64 },
     /// List queues, or the items in one queue
     List {
         queue: Option<String>,
-        /// Only items nobody has acked
+        /// Only items no subscription has acked, or with --subscription,
+        /// items that subscription has not acked
         #[arg(long)]
         unacked: bool,
+        #[arg(long, requires = "unacked")]
+        subscription: Option<String>,
         /// The newest N items
         #[arg(long, default_value_t = 50)]
         limit: i64,
@@ -201,7 +208,9 @@ fn clock(now: Option<i64>) -> i64 {
 /// The handler deadline gaff sets, less a margin for exit and flush.
 fn deadline() -> Option<Instant> {
     let ms: u64 = std::env::var("GAFF_TIMEOUT_MS").ok()?.parse().ok()?;
-    Some(Instant::now() + Duration::from_millis(ms.saturating_sub(100)))
+    // A quarter of a short deadline, at most 100 ms, covers exit and flush.
+    let margin = (ms / 4).min(100);
+    Some(Instant::now() + Duration::from_millis(ms - margin))
 }
 
 /// Run the program on `argv`; return the exit code.
@@ -322,7 +331,11 @@ fn dispatch(args: Args) -> Result<i32> {
                 None => store.pull_due(&p.subscriber, &opts, &mut stdout)?,
             };
         }
-        Command::Ack { id, subscriber } => match store.ack(id, &subscriber, now)? {
+        Command::Ack {
+            id,
+            subscriber,
+            subscription,
+        } => match store.ack_in(id, &subscriber, subscription.as_deref(), now)? {
             AckOutcome::Acked => writeln!(stdout, "acked {id}")?,
             AckOutcome::AlreadyAcked { owner, at } => {
                 writeln!(stdout, "already acked by {owner} at {at}")?;
@@ -341,6 +354,7 @@ fn dispatch(args: Args) -> Result<i32> {
         Command::List {
             queue,
             unacked,
+            subscription,
             limit,
         } => match queue {
             None => {
@@ -349,7 +363,7 @@ fn dispatch(args: Args) -> Result<i32> {
                 }
             }
             Some(q) => {
-                for item in store.list(&q, unacked, limit)? {
+                for item in store.list(&q, unacked, subscription.as_deref(), limit)? {
                     writeln!(stdout, "{}", serde_json::to_string(&item)?)?;
                 }
             }

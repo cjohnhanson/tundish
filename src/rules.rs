@@ -120,6 +120,9 @@ impl Rules {
                 "select: latest skips items, and share: one must not skip work; use since_last_read".into(),
             ));
         }
+        if self.limit == Some(0) {
+            return Err(Error::Usage("limit must be at least 1".into()));
+        }
         if self.lease <= 0 || self.max_attempts <= 0 {
             return Err(Error::Usage(
                 "lease and max_attempts must be positive".into(),
@@ -152,7 +155,8 @@ pub fn duration(s: &str) -> Result<i64> {
     if n <= 0 {
         return Err(Error::Usage(format!("a duration must be positive: {s}")));
     }
-    Ok(n * mult)
+    n.checked_mul(mult)
+        .ok_or_else(|| Error::Usage(format!("a duration is too long: {s}")))
 }
 
 #[cfg(test)]

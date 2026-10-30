@@ -135,6 +135,22 @@ fn twenty_pullers_take_each_item_exactly_once() {
 fn ten_racing_acks_have_one_winner() {
     let d = tempfile::tempdir().unwrap();
     let db = d.path().join("t.db");
+    ok(
+        &db,
+        &[
+            "subscribe",
+            "work",
+            "--as",
+            "agent0",
+            "--queue",
+            "q",
+            "--consume",
+            "on-ack",
+        ],
+    );
+    for i in 1..10 {
+        ok(&db, &["subscribe", "work", "--as", &format!("agent{i}")]);
+    }
     let id = ok(&db, &["publish", "q", "{}"]);
     let id = id.trim();
     let children: Vec<_> = (0..10)
