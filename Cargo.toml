@@ -12,7 +12,7 @@ readme = "README.md"
 authors = ["Cody Hanson"]
 keywords = ["queue", "inbox", "agents", "sqlite", "cli"]
 categories = ["command-line-utilities", "development-tools"]
-exclude = ["npm/", "python/", "pyproject.toml", "tests/", ".github/", ".gaff/", ".tisket/"]
+exclude = ["npm/", "python/", "pyproject.toml", "tests/", ".github/", ".gaff/", ".tisket/", ".agents/", "scripts/", "homebrew/", "flake.nix", "flake.lock", "almanac.yml"]
 
 [lib]
 # rlib for the binary and the tests; cdylib for the Python module.

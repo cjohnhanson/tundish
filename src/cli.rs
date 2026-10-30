@@ -24,7 +24,7 @@ static DOCS: &[(&str, &str)] = diataxis::embedded_docs!();
 #[command(name = "tundish", version, about = ABOUT)]
 pub struct Args {
     /// The database file, in place of `database:` in the config. A test
-    /// seam: printed commands assume the configured database.
+    /// seam: prime and the skill assume the configured database.
     #[arg(long, global = true, hide = true)]
     db: Option<PathBuf>,
 

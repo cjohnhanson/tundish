@@ -18,7 +18,8 @@ fn err(e: crate::Error) -> PyErr {
 }
 
 /// Publish one item; return its id. `payload` is anything `json.dumps`
-/// accepts. `db` and `config` default to the CLI's defaults.
+/// accepts. The database comes from the tundish config; `db` and
+/// `config` exist for tests.
 #[pyfunction]
 #[pyo3(signature = (queue, payload, key=None, db=None, config=None))]
 fn publish(

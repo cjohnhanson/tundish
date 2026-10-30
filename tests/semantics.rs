@@ -478,6 +478,28 @@ fn changing_share_on_the_same_queue_keeps_positions() {
 }
 
 #[test]
+fn idle_due_subscriptions_do_not_starve_one_with_items() {
+    for (idle, long) in [(4, false), (2, true)] {
+        let (_d, mut s) = store();
+        let who = if long { "w".repeat(64) } else { "w".into() };
+        let name = |i: usize| {
+            if long {
+                format!("{i}{}", "s".repeat(63))
+            } else {
+                format!("a{i}")
+            }
+        };
+        for i in 0..=idle {
+            s.subscribe(&name(i), &who, Some(Rules::new(&format!("q{i}"))), 0)
+                .unwrap();
+        }
+        let last = publish(&mut s, &format!("q{idle}"), 1, 1);
+        let got = ids(&pull_due(&mut s, &who, PullOpts::at(2)));
+        assert_eq!(got, last, "{idle} idle, long names {long}");
+    }
+}
+
+#[test]
 fn pull_due_commits_every_subscription_or_none() {
     let (_d, mut s) = store();
     s.subscribe("one", "a", Some(Rules::new("q1")), 0).unwrap();

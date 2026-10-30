@@ -114,7 +114,7 @@ pub struct Retention {
 pub struct PullOpts {
     /// The clock, in Unix seconds.
     pub now: i64,
-    /// The budget for the whole printed batch, footers included.
+    /// The budget for the whole printed batch, status lines included.
     pub max_bytes: usize,
     /// Past this instant, the pull rolls back instead of committing.
     pub deadline: Option<Instant>,
@@ -370,14 +370,16 @@ impl Store {
             }
             if matches!(change, Change::Moved { .. }) {
                 tx.execute(
-                    "UPDATE subscriptions SET lwm = ?2, dropped = 0, errors = 0, parked = 0
+                    "UPDATE subscriptions SET lwm = ?2, dropped = 0, errors = 0, parked = 0,
+                       last_error = NULL
                      WHERE name = ?1",
                     params![name, start],
                 )?;
                 tx.execute("DELETE FROM acks WHERE subscription = ?1", [name])?;
                 tx.execute("DELETE FROM leases WHERE subscription = ?1", [name])?;
                 tx.execute(
-                    "UPDATE subscribers SET origin = ?2, cursor = ?2, dropped = 0, errors = 0
+                    "UPDATE subscribers SET origin = ?2, cursor = ?2, dropped = 0, errors = 0,
+                       last_error = NULL
                      WHERE subscription = ?1",
                     params![name, start],
                 )?;
@@ -458,22 +460,18 @@ impl Store {
                 "{subscriber} holds no subscription, so nothing can be due: tundish subscribe <name> --as {subscriber}"
             )));
         }
-        let mut chosen: Vec<(String, usize)> = Vec::new();
-        let mut reserved = 0;
-        for name in self.due(subscriber, opts.now)? {
-            let line = status_max(name.len(), subscriber.len());
-            if reserved + line + ITEM_SLICE > opts.max_bytes {
-                break;
-            }
-            reserved += line;
-            chosen.push((name, line));
-        }
+        let due = self.due(subscriber, opts.now)?;
         let tx = self.write()?;
         let mut text = String::new();
         let mut n = 0;
-        for (i, (name, _)) in chosen.iter().enumerate() {
-            let later: usize = chosen[i + 1..].iter().map(|(_, line)| line).sum();
-            let left = opts.max_bytes.saturating_sub(text.len() + later);
+        for name in &due {
+            // Each subscription gets what is left. One that prints
+            // nothing costs nothing; one with no room stays due and,
+            // not having delivered, comes first next time.
+            let left = opts.max_bytes.saturating_sub(text.len());
+            if left < status_max(name.len(), subscriber.len()) + ITEM_SLICE {
+                continue;
+            }
             let (t, k) = pull_in(&tx, name, subscriber, opts, left, text.is_empty())?;
             text.push_str(&t);
             n += k;
