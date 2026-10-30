@@ -417,8 +417,9 @@ impl Store {
     }
 
     /// The subscriptions `subscriber` is bound to whose `every` window
-    /// has passed, least recently delivered first, so a backlog in one
-    /// cannot hold the others behind it.
+    /// has passed, ordered by next_at then name. A delivery moves
+    /// next_at forward, so a backlog in one cannot hold the others
+    /// behind it.
     pub fn due(&self, subscriber: &str, now: i64) -> Result<Vec<String>> {
         let mut st = self.conn.prepare(
             "SELECT subscription FROM subscribers WHERE subscriber = ?1 AND next_at <= ?2
