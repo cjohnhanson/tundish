@@ -3,7 +3,7 @@ doc: |
   nothing, so they all end in one terminal state.
 transitions:
   - name: "a second subscriber's ack exits 3 and names the owner"
-    command: "tundish --now 1004 subscribe inbox --as other && tundish --now 1004 ack 1 --as other; echo \"exit $?\""
+    command: "tundish --now 1004 subscribe inbox --as other >/dev/null && tundish --now 1004 ack 1 --as other; echo \"exit $?\""
     target: "../ack-taken"
     stdout: "already acked by reader at 1003\nexit 3\n"
   - name: "a repeat ack by the owner still succeeds"

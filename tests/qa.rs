@@ -4,6 +4,55 @@ use serde_json::json;
 use tundish::rules::{Consume, Rules, Select, Share};
 use tundish::{AckOutcome, PullOpts, Retention, Store};
 
+#[test]
+fn a_named_config_that_does_not_exist_is_an_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let typo = dir.path().join("confg.yml");
+    let err = tundish::config::Config::load(Some(&typo)).unwrap_err();
+    assert!(err.to_string().contains("confg.yml"), "{err}");
+    assert!(
+        tundish::config::Config::load(None).is_ok(),
+        "the fixed path may be absent"
+    );
+}
+
+#[test]
+fn subscribe_reports_what_it_changed() {
+    use tundish::store::Change;
+    let (_d, mut s) = store();
+    let o = s.subscribe("s", "r", Some(Rules::new("q")), 0).unwrap();
+    assert_eq!((o.change, o.bound), (Change::Created, true));
+    let o = s.subscribe("s", "r", Some(Rules::new("q")), 0).unwrap();
+    assert_eq!((o.change, o.bound), (Change::Replaced, false));
+    let o = s.subscribe("s", "r", Some(Rules::new("other")), 0).unwrap();
+    assert_eq!(
+        (o.change, o.bound),
+        (
+            Change::Moved {
+                from: "q".to_string()
+            },
+            false
+        )
+    );
+    let o = s.subscribe("s", "r2", None, 0).unwrap();
+    assert_eq!((o.change, o.bound), (Change::None, true));
+    assert_eq!(o.rules.queue, "other");
+}
+
+#[test]
+fn a_due_pull_for_a_subscriber_with_no_subscriptions_is_an_error() {
+    let (_d, mut s) = store();
+    s.subscribe("s", "r", Some(Rules::new("q")), 0).unwrap();
+    let err = s
+        .pull_due("rr", &PullOpts::at(1), &mut Vec::new())
+        .unwrap_err();
+    assert!(err.to_string().contains("--as rr"), "{err}");
+    assert!(
+        s.pull_due("r", &PullOpts::at(1), &mut Vec::new()).is_ok(),
+        "a bound subscriber with nothing due is fine"
+    );
+}
+
 fn store() -> (tempfile::TempDir, Store) {
     let dir = tempfile::tempdir().unwrap();
     let s = Store::open(&dir.path().join("t.db")).unwrap();

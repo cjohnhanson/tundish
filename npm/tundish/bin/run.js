@@ -25,8 +25,8 @@ const PLATFORMS = {
 	},
 };
 
-const rel = env.TISKET_BINARY ? null : PLATFORMS?.[platform]?.[arch];
-let bin = env.TISKET_BINARY || null;
+const rel = env.TUNDISH_BINARY ? null : PLATFORMS?.[platform]?.[arch];
+let bin = env.TUNDISH_BINARY || null;
 let unresolved = false;
 if (!bin && rel) {
 	// The platform is built, so a failure here means the package did not
@@ -42,7 +42,7 @@ if (!bin && rel) {
 // An override that does not exist is a reader's typo, not a platform
 // they are stuck on. It gets its own message naming the path.
 if (bin && !existsSync(bin)) {
-	console.error(`TISKET_BINARY is set to ${bin}, and no file is there.`);
+	console.error(`TUNDISH_BINARY is set to ${bin}, and no file is there.`);
 	process.exitCode = 1;
 } else if (unresolved) {
 	console.error(
@@ -53,7 +53,7 @@ if (bin && !existsSync(bin)) {
 } else if (!bin) {
 	console.error(
 		`tundish ships no prebuilt binary for ${platform} ${arch}. ` +
-			"Install it with `cargo install tundish`, or set TISKET_BINARY to a path.",
+			"Install it with `cargo install tundish`, or set TUNDISH_BINARY to a path.",
 	);
 	process.exitCode = 1;
 } else {

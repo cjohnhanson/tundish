@@ -106,6 +106,29 @@ pub enum AckOutcome {
     NotFound,
 }
 
+/// What a subscribe did to the stored rules.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Change {
+    /// No rules were given; the stored ones stand.
+    None,
+    Created,
+    /// New rules on the same queue; positions and acks stand.
+    Replaced,
+    /// New rules on another queue; positions, acks, and leases reset.
+    Moved {
+        from: String,
+    },
+}
+
+/// The result of a subscribe.
+#[derive(Debug, Clone)]
+pub struct Subscribed {
+    pub change: Change,
+    /// Whether this call bound the subscriber.
+    pub bound: bool,
+    pub rules: Rules,
+}
+
 /// One subscription's ack of an item.
 #[derive(Debug, Clone, Serialize)]
 pub struct Ack {
@@ -259,13 +282,14 @@ impl Store {
         subscriber: &str,
         rules: Option<Rules>,
         now: i64,
-    ) -> Result<()> {
+    ) -> Result<Subscribed> {
         if subscriber.is_empty() || name.is_empty() {
             return Err(Error::Usage(
                 "a subscription and a subscriber need names".into(),
             ));
         }
         let tx = self.write()?;
+        let mut change = Change::None;
         if let Some(r) = &rules {
             r.check()?;
             let old: Option<String> = tx
@@ -281,7 +305,12 @@ impl Store {
                  ON CONFLICT(name) DO UPDATE SET queue = excluded.queue, rules = excluded.rules",
                 params![name, r.queue, serde_json::to_string(r)?, now],
             )?;
-            if old.is_some_and(|q| q != r.queue) {
+            change = match old {
+                None => Change::Created,
+                Some(q) if q == r.queue => Change::Replaced,
+                Some(q) => Change::Moved { from: q },
+            };
+            if matches!(change, Change::Moved { .. }) {
                 let start = start_position(&tx, r)?;
                 tx.execute("UPDATE subscriptions SET lwm = 0 WHERE name = ?1", [name])?;
                 tx.execute("DELETE FROM acks WHERE subscription = ?1", [name])?;
@@ -294,16 +323,20 @@ impl Store {
         }
         let rules = load_rules(&tx, name)?;
         let start = start_position(&tx, &rules)?;
-        tx.execute(
+        let bound = tx.execute(
             "INSERT OR IGNORE INTO subscribers(subscription, subscriber, origin, cursor)
              VALUES (?1, ?2, ?3, ?3)",
             params![name, subscriber, start],
-        )?;
+        )? > 0;
         tx.commit()?;
-        Ok(())
+        Ok(Subscribed {
+            change,
+            bound,
+            rules,
+        })
     }
 
-    /// Unbind a subscriber; the last one out leaves the subscription.
+    /// Unbind a subscriber. The subscription and its acks remain.
     pub fn unsubscribe(&mut self, name: &str, subscriber: &str) -> Result<bool> {
         let n = self.conn.execute(
             "DELETE FROM subscribers WHERE subscription = ?1 AND subscriber = ?2",
@@ -350,6 +383,16 @@ impl Store {
         out: &mut dyn Write,
     ) -> Result<usize> {
         check_budget(opts.max_bytes)?;
+        let bindings: i64 = self.conn.query_row(
+            "SELECT count(*) FROM subscribers WHERE subscriber = ?1",
+            [subscriber],
+            |r| r.get(0),
+        )?;
+        if bindings == 0 {
+            return Err(Error::Usage(format!(
+                "{subscriber} holds no subscription, so nothing can be due: tundish subscribe <name> --as {subscriber}"
+            )));
+        }
         let names = self.due(subscriber, opts.now)?;
         let tx = self.write()?;
         let mut text = String::new();
@@ -657,7 +700,8 @@ fn footer(
 /// One subscription's batch, recorded in `tx`, returned as text that
 /// fits `budget` with its footer. Only the first item of a whole
 /// output (`may_cut`) is cut to fit. A `quiet` pull that delivers no
-/// item prints nothing, so a hook does not repeat its notices.
+/// item prints only the notices that happen once, so a hook does not
+/// repeat the unacked and parked counts.
 fn pull_in(
     tx: &Connection,
     name: &str,
@@ -821,7 +865,13 @@ fn pull_in(
         }
     }
     if quiet && delivered.is_empty() {
-        return Ok((String::new(), 0));
+        // The open and parked counts repeat on every pull; filter errors
+        // and drops are reported once, so they still print.
+        notes.open = 0;
+        notes.parked = 0;
+        if notes.filter_errors == 0 && notes.dropped == 0 {
+            return Ok((String::new(), 0));
+        }
     }
     if dropped > 0 {
         tx.execute(
@@ -1037,7 +1087,8 @@ fn trim(tx: &Connection, queue: &str, now: i64, r: Retention) -> Result<()> {
                SELECT s.cursor AS pos FROM subscribers s JOIN subscriptions p ON p.name = s.subscription
                  WHERE p.queue = ?1 AND json_extract(p.rules, '$.share') IS NOT 'one'
                UNION ALL
-               SELECT lwm FROM subscriptions WHERE queue = ?1 AND json_extract(rules, '$.share') = 'one')",
+               SELECT p.lwm FROM subscriptions p WHERE p.queue = ?1 AND json_extract(p.rules, '$.share') = 'one'
+                 AND EXISTS (SELECT 1 FROM subscribers s WHERE s.subscription = p.name))",
             [queue],
             |row| row.get(0),
         )?;

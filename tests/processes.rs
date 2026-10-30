@@ -5,11 +5,12 @@ use std::path::Path;
 use std::process::{Command, Output, Stdio};
 
 fn tundish(db: &Path, args: &[&str]) -> Command {
+    let config = db.with_extension("yml");
+    if !config.exists() {
+        std::fs::write(&config, "format: 1\n").unwrap();
+    }
     let mut c = Command::new(env!("CARGO_BIN_EXE_tundish"));
-    c.arg("--db")
-        .arg(db)
-        .arg("--config")
-        .arg(db.with_extension("yml"));
+    c.arg("--db").arg(db).arg("--config").arg(config);
     c.args(args);
     c.env_remove("GAFF_TIMEOUT_MS");
     c

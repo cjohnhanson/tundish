@@ -48,10 +48,11 @@ impl Config {
     }
 
     /// Load from `path`, or from the fixed path when `None`. A missing
-    /// file means every default.
+    /// fixed file means every default; a named file must exist.
     pub fn load(path: Option<&Path>) -> Result<Self> {
         let home = mdstore::userconfig::passwd_home()
             .ok_or_else(|| Error::Usage("no home directory in the passwd database".into()))?;
+        let named = path.is_some();
         let path = path.map_or_else(
             || home.join(".config/tundish/config.yml"),
             Path::to_path_buf,
@@ -59,6 +60,12 @@ impl Config {
         let raw: Raw = match std::fs::read_to_string(&path) {
             Ok(text) => yaml_serde::from_str(&text)
                 .map_err(|e| Error::Usage(format!("{}: {e}", path.display())))?,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound && named => {
+                return Err(Error::Usage(format!(
+                    "{}: no such config file",
+                    path.display()
+                )));
+            }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Raw {
                 format: 1,
                 ..Raw::default()

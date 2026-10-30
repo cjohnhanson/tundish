@@ -9,6 +9,9 @@ import tundish
 
 
 def cli(db: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    config = db.with_suffix(".yml")
+    if not config.exists():
+        config.write_text("format: 1\n")
     return subprocess.run(
         [
             sys.executable,
@@ -46,6 +49,15 @@ def test_bad_payload_is_a_value_error(tmp_path: Path) -> None:
     except TypeError:
         return  # json.dumps refuses a set before Rust sees it
     raise AssertionError("a set is not JSON")
+
+
+def test_a_named_config_that_does_not_exist_is_a_value_error(tmp_path: Path) -> None:
+    try:
+        tundish.publish("q", {}, db=tmp_path / "t.db", config=tmp_path / "confg.yml")
+    except ValueError as e:
+        assert "confg.yml" in str(e)
+        return
+    raise AssertionError("a mistyped config path was ignored")
 
 
 def test_version() -> None:

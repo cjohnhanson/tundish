@@ -10,7 +10,7 @@ use clap::{Args as ClapArgs, Parser, Subcommand};
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::rules::{Consume, Rules, Select, Share, Start, duration};
-use crate::store::{AckOutcome, PullOpts, Store};
+use crate::store::{AckOutcome, Change, PullOpts, Store};
 
 /// The one-line description. `--help` and `prime` both print it.
 pub const ABOUT: &str = "A local inbox that agents subscribe to";
@@ -128,7 +128,7 @@ struct SubscribeArgs {
     /// A jaq expression per item that yields the printed text
     #[arg(long, requires = "queue")]
     template: Option<String>,
-    /// How long a share=one, consume=on-ack lease holds
+    /// How long a lease holds under --share one and --consume on-ack
     #[arg(long, requires = "queue")]
     lease: Option<String>,
     /// Leases before an item is parked
@@ -309,7 +309,21 @@ fn dispatch(args: Args) -> Result<i32> {
         }
         Command::Subscribe(s) => {
             let rules = s.queue.as_deref().map(|q| rules_from(q, &s)).transpose()?;
-            store.subscribe(&s.name, &s.subscriber, rules, now)?;
+            let done = store.subscribe(&s.name, &s.subscriber, rules, now)?;
+            let name = &s.name;
+            match &done.change {
+                Change::None => {}
+                Change::Created => writeln!(stdout, "created {name}")?,
+                Change::Replaced => writeln!(stdout, "replaced the rules of {name}")?,
+                Change::Moved { from } => writeln!(
+                    stdout,
+                    "moved {name} from {from}; its positions, acks, and leases were reset"
+                )?,
+            }
+            if done.bound {
+                writeln!(stdout, "bound {} to {name}", s.subscriber)?;
+            }
+            writeln!(stdout, "rules: {}", serde_json::to_string(&done.rules)?)?;
         }
         Command::Unsubscribe { name, subscriber } => {
             if !store.unsubscribe(&name, &subscriber)? {

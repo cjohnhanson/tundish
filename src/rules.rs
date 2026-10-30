@@ -113,19 +113,19 @@ impl Rules {
             return Err(Error::Usage("a subscription needs a queue".into()));
         }
         if self.select == Select::Latest && self.limit.is_none() {
-            return Err(Error::Usage("select: latest needs a limit".into()));
+            return Err(Error::Usage("--select latest needs --limit".into()));
         }
         if self.select == Select::Latest && self.share == Share::One {
             return Err(Error::Usage(
-                "select: latest skips items, and share: one must not skip work; use since_last_read".into(),
+                "--select latest skips items, and --share one must not skip work; use --select since-last-read".into(),
             ));
         }
         if self.limit == Some(0) {
-            return Err(Error::Usage("limit must be at least 1".into()));
+            return Err(Error::Usage("--limit must be at least 1".into()));
         }
         if self.lease <= 0 || self.max_attempts <= 0 {
             return Err(Error::Usage(
-                "lease and max_attempts must be positive".into(),
+                "--lease and --max-attempts must be positive".into(),
             ));
         }
         if let Some(f) = &self.filter {

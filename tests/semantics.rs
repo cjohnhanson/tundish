@@ -355,6 +355,38 @@ fn a_due_pull_prints_notices_only_with_new_items() {
 }
 
 #[test]
+fn a_due_pull_reports_filter_errors_even_with_no_items() {
+    let (_d, mut s) = store();
+    let mut r = Rules::new("q");
+    r.filter = Some(".payload.a.b == 1".into());
+    s.subscribe("feed", "a", Some(r), 0).unwrap();
+    s.publish("q", None, &json!({"a": 5}), 1, Retention::default())
+        .unwrap();
+    let out = pull_due(&mut s, "a", PullOpts::at(2));
+    assert!(
+        out.contains("failed the filter"),
+        "silently skipped: {out:?}"
+    );
+}
+
+#[test]
+fn an_unbound_share_one_subscription_does_not_hold_retention() {
+    let (_d, mut s) = store();
+    let mut r = Rules::new("q");
+    r.share = Share::One;
+    s.subscribe("work", "w", Some(r), 0).unwrap();
+    s.unsubscribe("work", "w").unwrap();
+    let keep = Retention {
+        max_items: Some(2),
+        max_age: None,
+    };
+    for i in 0..6 {
+        s.publish("q", None, &json!({"n": i}), 1, keep).unwrap();
+    }
+    assert_eq!(s.count("q").unwrap(), 2);
+}
+
+#[test]
 fn a_due_pull_does_not_starve_later_subscriptions() {
     let (_d, mut s) = store();
     s.subscribe("a1", "z", Some(Rules::new("q1")), 0).unwrap();
