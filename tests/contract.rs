@@ -427,6 +427,105 @@ fn status_keeps_the_last_error_text() {
 }
 
 #[test]
+fn a_later_clean_pull_keeps_the_last_error_text() {
+    let (_d, mut s) = store();
+    s.subscribe("feed", "a", Some(adds_one()), 0).unwrap();
+    bad_item(&mut s, 1);
+    pull(&mut s, "feed", "a", 2);
+    put(&mut s, "q", json!({"x": 1}), 3);
+    pull(&mut s, "feed", "a", 4);
+    let st = s.status(5).unwrap();
+    let last = st[0].last_error.as_deref().expect("kept past a clean pull");
+    assert!(last.contains("yyy"), "{last}");
+
+    let mut one = adds_one();
+    one.share = Share::One;
+    s.subscribe("work", "w", Some(one), 6).unwrap();
+    bad_item(&mut s, 7);
+    pull(&mut s, "work", "w", 8);
+    put(&mut s, "q", json!({"x": 2}), 9);
+    pull(&mut s, "work", "w", 10);
+    let st = s.status(11).unwrap();
+    let work = st.iter().find(|r| r.subscription == "work").unwrap();
+    assert!(
+        work.last_error
+            .as_deref()
+            .is_some_and(|e| e.contains("yyy")),
+        "{work:?}"
+    );
+}
+
+#[test]
+fn a_status_only_pull_does_not_start_the_every_window() {
+    let (_d, mut s) = store();
+    let mut r = adds_one();
+    r.every = Some(300);
+    s.subscribe("feed", "a", Some(r), 0).unwrap();
+    bad_item(&mut s, 1);
+    let first = pull_due(&mut s, "a", &PullOpts::at(2));
+    assert_eq!(count(&first, "feed", "errors"), 1, "{first}");
+    assert!(ids(&first).is_empty(), "{first}");
+    let good = put(&mut s, "q", json!({"x": 1}), 3);
+    assert_eq!(ids(&pull_due(&mut s, "a", &PullOpts::at(4))), vec![good]);
+}
+
+#[test]
+fn a_parked_item_behind_a_live_lease_is_reported_once() {
+    let (_d, mut s) = store();
+    // Item 2 parks while item 1 is still under a's live lease, so the
+    // shared position cannot pass item 2 yet.
+    let mut r = on_ack("q");
+    r.share = Share::One;
+    r.lease = 1000;
+    r.max_attempts = 2;
+    r.limit = Some(1);
+    s.subscribe("jobs", "a", Some(r.clone()), 0).unwrap();
+    s.subscribe("jobs", "b", None, 0).unwrap();
+    let first = put(&mut s, "q", json!({"n": 1}), 1);
+    let second = put(&mut s, "q", json!({"n": 2}), 1);
+    assert_eq!(ids(&pull(&mut s, "jobs", "a", 2)), vec![first]);
+    r.lease = 5;
+    s.subscribe("jobs", "a", Some(r), 2).unwrap();
+    assert_eq!(ids(&pull(&mut s, "jobs", "b", 3)), vec![second]);
+    assert_eq!(ids(&pull(&mut s, "jobs", "b", 9)), vec![second]);
+    let mut reports = 0;
+    for now in [15, 16, 17] {
+        let out = pull(&mut s, "jobs", "b", now);
+        reports += i64::from(field(&out, "jobs", "parked").is_some_and(|v| v != "0"));
+    }
+    s.ack(first, "a", 18).unwrap();
+    for now in [19, 20] {
+        let out = pull(&mut s, "jobs", "b", now);
+        reports += i64::from(field(&out, "jobs", "parked").is_some_and(|v| v != "0"));
+    }
+    assert_eq!(reports, 1, "parked must be reported exactly once");
+}
+
+#[test]
+fn several_due_subscriptions_stay_inside_the_budget_and_all_deliver() {
+    let (_d, mut s) = store();
+    let who = "w".repeat(64);
+    let mut want = Vec::new();
+    for i in 0..4 {
+        let name = format!("{i}{}", "s".repeat(32));
+        let q = format!("q{i}");
+        s.subscribe(&name, &who, Some(Rules::new(&q)), 0).unwrap();
+        for n in 0..if i == 0 { 20 } else { 1 } {
+            want.push(put(&mut s, &q, json!({"n": n, "pad": "x".repeat(40)}), 1));
+        }
+    }
+    let mut got = Vec::new();
+    for now in 2..30 {
+        let out = pull_due(&mut s, &who, &budget(now, 1024));
+        assert!(out.len() <= 1024, "{} bytes at {now}", out.len());
+        got.extend(ids(&out));
+    }
+    got.sort_unstable();
+    want.sort_unstable();
+    assert_eq!(got, want);
+}
+
+#[test]
 fn a_parked_item_is_reported_once_and_stays_visible_in_status() {
     let (_d, mut s) = store();
     let mut r = on_ack("q");
