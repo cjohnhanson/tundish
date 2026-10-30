@@ -149,7 +149,8 @@ impl Row {
     }
 }
 
-const DEFAULT_TEMPLATE: &str = r#""[\(.queue)#\(.id)]" + (if .key then " \(.key)" else "" end) + " \(.payload | tojson)""#;
+const DEFAULT_TEMPLATE: &str =
+    r#""[\(.queue)#\(.id)]" + (if .key then " \(.key)" else "" end) + " \(.payload | tojson)""#;
 
 impl Store {
     /// Open or create the store at `path`, waiting up to five seconds
@@ -531,7 +532,6 @@ fn pull_in(
 }
 
 impl Store {
-
     /// Ack an item for `owner`. The first ack wins; a repeat by the
     /// same owner is a no-op that still reports `Acked`.
     pub fn ack(&mut self, item: i64, owner: &str, now: i64) -> Result<AckOutcome> {
@@ -626,11 +626,11 @@ impl Store {
 
     /// Items in one queue.
     pub fn count(&self, queue: &str) -> Result<i64> {
-        Ok(self
-            .conn
-            .query_row("SELECT count(*) FROM items WHERE queue = ?1", [queue], |r| {
-                r.get(0)
-            })?)
+        Ok(self.conn.query_row(
+            "SELECT count(*) FROM items WHERE queue = ?1",
+            [queue],
+            |r| r.get(0),
+        )?)
     }
 
     /// Every subscription and its rules.

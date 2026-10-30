@@ -9,7 +9,7 @@ use clap::{Args as ClapArgs, Parser, Subcommand};
 
 use crate::config::Config;
 use crate::error::{Error, Result};
-use crate::rules::{duration, Consume, Rules, Select, Share, Start};
+use crate::rules::{Consume, Rules, Select, Share, Start, duration};
 use crate::store::{AckOutcome, PullOpts, Store};
 
 /// The one-line description. `--help` and `prime` both print it.
