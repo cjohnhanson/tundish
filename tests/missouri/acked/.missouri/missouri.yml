@@ -29,7 +29,7 @@ transitions:
   - name: "status prints the subscriber's position"
     command: "tundish status"
     target: "../inspected"
-    stdout: "inbox\treader\tqueue=slack\tcursor=1\tunread=0\tnext_at=0\tdropped=0\n"
+    stdout: "inbox\treader\tqueue=slack\tcursor=1\tunread=0\tnext_at=1002\tdropped=0\n"
   - name: "check accepts the subscription"
     command: "tundish check"
     target: "../inspected"

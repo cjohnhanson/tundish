@@ -319,6 +319,57 @@ fn a_custom_template_renders_each_item() {
     assert_eq!(pull(&mut s, "feed", "a", 2), format!("#{} n=0\n", p[0]));
 }
 
+fn pull_due(s: &mut Store, who: &str, opts: PullOpts) -> String {
+    let mut out = Vec::new();
+    s.pull_due(who, &opts, &mut out).unwrap();
+    String::from_utf8(out).unwrap()
+}
+
+#[test]
+fn a_due_pull_prints_notices_only_with_new_items() {
+    let (_d, mut s) = store();
+    let mut r = Rules::new("q");
+    r.consume = Consume::OnAck;
+    r.every = Some(300);
+    s.subscribe("inbox", "a", Some(r), 0).unwrap();
+    let p = publish(&mut s, "q", 1, 1);
+    assert_eq!(ids(&pull_due(&mut s, "a", PullOpts::at(2))), p);
+    for now in [400, 401, 402] {
+        assert_eq!(
+            pull_due(&mut s, "a", PullOpts::at(now)),
+            "",
+            "an unacked notice alone is not a delivery"
+        );
+    }
+    assert!(
+        pull(&mut s, "inbox", "a", 403).contains("unacked"),
+        "a named pull still reports open items"
+    );
+    let q = publish(&mut s, "q", 1, 404);
+    let out = pull_due(&mut s, "a", PullOpts::at(405));
+    assert_eq!(ids(&out), q);
+    assert!(
+        out.contains("unacked"),
+        "the notice rides with items: {out}"
+    );
+}
+
+#[test]
+fn a_due_pull_does_not_starve_later_subscriptions() {
+    let (_d, mut s) = store();
+    s.subscribe("a1", "z", Some(Rules::new("q1")), 0).unwrap();
+    s.subscribe("b1", "z", Some(Rules::new("q2")), 0).unwrap();
+    publish(&mut s, "q1", 40, 1);
+    let b = publish(&mut s, "q2", 1, 1);
+    let mut seen = Vec::new();
+    for now in [2, 3] {
+        let mut opts = PullOpts::at(now);
+        opts.max_bytes = 300;
+        seen.extend(ids(&pull_due(&mut s, "z", opts)));
+    }
+    assert!(seen.contains(&b[0]), "b1 waited behind a1: {seen:?}");
+}
+
 #[test]
 fn pull_due_commits_every_subscription_or_none() {
     let (_d, mut s) = store();

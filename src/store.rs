@@ -313,11 +313,12 @@ impl Store {
     }
 
     /// The subscriptions `subscriber` is bound to whose `every` window
-    /// has passed, in name order.
+    /// has passed, least recently delivered first, so a backlog in one
+    /// cannot hold the others behind it.
     pub fn due(&self, subscriber: &str, now: i64) -> Result<Vec<String>> {
         let mut st = self.conn.prepare(
             "SELECT subscription FROM subscribers WHERE subscriber = ?1 AND next_at <= ?2
-             ORDER BY subscription",
+             ORDER BY next_at, subscription",
         )?;
         let rows = st.query_map(params![subscriber, now], |r| r.get(0))?;
         Ok(rows.collect::<std::result::Result<_, _>>()?)
@@ -335,7 +336,7 @@ impl Store {
     ) -> Result<usize> {
         check_budget(opts.max_bytes)?;
         let tx = self.write()?;
-        let (text, n) = pull_in(&tx, name, subscriber, opts, opts.max_bytes, true)?;
+        let (text, n) = pull_in(&tx, name, subscriber, opts, opts.max_bytes, true, false)?;
         finish(tx, &text, opts, out)?;
         Ok(n)
     }
@@ -358,7 +359,7 @@ impl Store {
             if left < MIN_BYTES / 2 {
                 break;
             }
-            let (t, k) = pull_in(&tx, &name, subscriber, opts, left, text.is_empty())?;
+            let (t, k) = pull_in(&tx, &name, subscriber, opts, left, text.is_empty(), true)?;
             text.push_str(&t);
             n += k;
         }
@@ -655,7 +656,8 @@ fn footer(
 
 /// One subscription's batch, recorded in `tx`, returned as text that
 /// fits `budget` with its footer. Only the first item of a whole
-/// output (`may_cut`) is cut to fit.
+/// output (`may_cut`) is cut to fit. A `quiet` pull that delivers no
+/// item prints nothing, so a hook does not repeat its notices.
 fn pull_in(
     tx: &Connection,
     name: &str,
@@ -663,6 +665,7 @@ fn pull_in(
     opts: &PullOpts,
     budget: usize,
     may_cut: bool,
+    quiet: bool,
 ) -> Result<(String, usize)> {
     let rules = load_rules(tx, name)?;
     let state: Option<(i64, i64, i64)> = tx
@@ -817,18 +820,19 @@ fn pull_in(
             )?;
         }
     }
+    if quiet && delivered.is_empty() {
+        return Ok((String::new(), 0));
+    }
     if dropped > 0 {
         tx.execute(
             "UPDATE subscribers SET dropped = 0 WHERE subscription = ?1 AND subscriber = ?2",
             params![name, subscriber],
         )?;
     }
-    if !delivered.is_empty()
-        && let Some(every) = rules.every
-    {
+    if !delivered.is_empty() {
         tx.execute(
             "UPDATE subscribers SET next_at = ?3 WHERE subscription = ?1 AND subscriber = ?2",
-            params![name, subscriber, opts.now + every],
+            params![name, subscriber, opts.now + rules.every.unwrap_or(0)],
         )?;
     }
     text.push_str(&footer(
