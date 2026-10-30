@@ -30,6 +30,10 @@ print(item_id)
 `publish` returns the integer item id after committing the item. It calls
 the Rust library in-process. To use another database or config file,
 pass `db="/path/to/tundish.db"` or `config="/path/to/config.yml"`.
+A file named with `config=` must exist; a missing file raises `ValueError`
+with `<path>: no such config file`. When `config=` is omitted, only the
+fixed default path, `~/.config/tundish/config.yml`, may be absent; then
+every default applies.
 
 Choose a queue for a source or kind of item, such as `slack` or `ci`.
 Use a key for a label within that queue, such as `slack:C123` for a

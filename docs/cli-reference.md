@@ -15,7 +15,7 @@ tundish [--db <path>] [--config <file>] <command>
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `--db <path>` | Config `database:`, else `~/.local/state/tundish/tundish.db` | SQLite database path. |
-| `--config <file>` | `~/.config/tundish/config.yml` | Config file path. A missing file uses the defaults. |
+| `--config <file>` | `~/.config/tundish/config.yml` | Config file path. A file named with `--config` must exist. Only the default path may be absent when `--config` is omitted; then every default applies. |
 | `-h`, `--help` | | Print help. Each command also accepts these flags. |
 | `-V`, `--version` | | Print the version. |
 
@@ -23,6 +23,9 @@ tundish [--db <path>] [--config <file>] <command>
 comes from the passwd database. `HOME` and XDG environment variables do
 not change the default paths. There is no environment override for the
 config path.
+
+A missing file named with `--config` exits 2 and prints
+`tundish: <path>: no such config file`.
 
 ## Item
 
@@ -67,6 +70,21 @@ stable name, such as `reviewer`. Repeating the binding keeps its cursor.
 Replacing rules on the same queue keeps existing positions and claims.
 Moving the subscription to another queue resets its positions and removes
 its acks and leases.
+
+The command prints up to three lines, in this order:
+
+| When | Output |
+| --- | --- |
+| `--queue` creates a subscription | `created <name>` |
+| `--queue` replaces rules on the same queue | `replaced the rules of <name>` |
+| `--queue` moves the subscription to another queue | `moved <name> from <old queue>; its positions, acks, and leases were reset` |
+| This call binds the subscriber | `bound <subscriber> to <name>` |
+| Always | `rules: <the stored rules as compact JSON>` |
+
+Without `--queue`, no creation, replacement, or move line prints. An
+existing binding prints no `bound` line. Run
+`tundish subscribe <name> --as <subscriber>` with no other flags to read
+the stored rules. If the subscriber is already bound, only `rules:` prints.
 
 jaq evaluates jq expressions over JSON. Filters and templates see the
 item object, including `.payload`. In a filter, `false` and `null` are
@@ -145,7 +163,10 @@ passed, least recently delivered first, then by name. The name and
 `--max-bytes` defaults to 1024 and must be at least 128. A due pull uses
 one transaction and one byte budget across all subscriptions. It commits
 all delivery changes or none. A subscriber with no bound subscriptions
-gets no output from `pull --due`. When the budget runs out, skipped
+gets exit 2 from `pull --due` and the error
+`tundish: <who> holds no subscription, so nothing can be due: tundish subscribe <name> --as <who>`.
+This catches a typo in `--as` or `--db` in a hook.
+When the budget runs out, skipped
 subscriptions print no line of their own and come first on the next due pull.
 
 A pull prints and flushes the batch before committing delivery. A
@@ -153,8 +174,9 @@ failure before commit leaves delivery uncommitted. The next pull can
 repeat printed items. Delivery is at least once.
 
 A due pull prints a subscription's notices only when it also delivers at
-least one item from that subscription. With nothing to deliver, it prints
-nothing. A named pull prints applicable notices even without new items.
+least one item from that subscription. A bound subscriber with nothing
+due gets no output and exit 0. A named pull prints applicable notices
+even without new items.
 Retention drop counts remain pending until a pull reports them.
 
 An `--every` window starts only after a pull that prints an item. This
@@ -344,9 +366,9 @@ notice. The [pull output rules](#pull) determine when that notice prints.
 
 | Code | Meaning |
 | --- | --- |
-| 0 | Success, including a pull with no output. |
+| 0 | Success, including a pull with no output when the subscriber is bound. |
 | 1 | Error, including invalid JSON, expression errors, I/O or database errors, a missed deadline, or a failed docs request. |
-| 2 | Usage error, invalid config or rule values, unknown subscription, missing binding, or missing item for `show` or `ack`. |
+| 2 | Usage error, a missing named config file, invalid config or rule values, unknown subscription, missing binding (including `pull --due` for a subscriber with no subscriptions), or missing item for `show` or `ack`. |
 | 3 | An ack met another subscriber's ack or live lease. |
 
 For a missing binding, the message names

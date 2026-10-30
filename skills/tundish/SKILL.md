@@ -72,6 +72,10 @@ To bind this role to an existing subscription:
 tundish subscribe inbox --as reviewer
 ```
 
+The command prints `bound reviewer to inbox` only for a new binding,
+then `rules:` followed by the stored rules as compact JSON. Repeat it
+to read the rules; an existing binding prints only the `rules:` line.
+
 To create a subscription on a queue:
 
 ```sh
@@ -79,7 +83,10 @@ tundish subscribe inbox --as reviewer --queue slack --consume on-ack
 ```
 
 With `--queue`, the command also replaces an existing subscription's
-rules. Include every rule to keep. The default `--start all` includes
+rules. It prints `created inbox`, `replaced the rules of inbox`, or
+`moved inbox from <old queue>; its positions, acks, and leases were reset`,
+then any new binding and the stored rules. Include every rule to keep.
+The default `--start all` includes
 retained items; `--start new` includes only items published after a new
 subscriber joins. `tundish status` shows bindings and cursors.
 

@@ -25,6 +25,12 @@ differs, use it in the commands below. A queue needs no setup.
 tundish subscribe inbox --as reviewer --queue slack --consume on-ack
 ```
 
+```text
+created inbox
+bound reviewer to inbox
+rules: {"queue":"slack","select":"since_last_read","consume":"on_ack","share":"all","lease":600,"max_attempts":3,"start":"all"}
+```
+
 The subscription is `inbox`. It reads the queue `slack` for the subscriber
 `reviewer`. A new subscriber starts with all items still kept, including
 the item just published. `--consume on-ack` keeps an item open until a

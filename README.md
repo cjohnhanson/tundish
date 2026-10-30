@@ -47,7 +47,15 @@ tundish subscribe inbox --as reviewer --queue slack --consume on-ack
 tundish pull inbox --as reviewer
 ```
 
-In a new database, the publish prints `1` and the pull prints:
+In a new database, the publish prints `1` and the subscribe prints:
+
+```text
+created inbox
+bound reviewer to inbox
+rules: {"queue":"slack","select":"since_last_read","consume":"on_ack","share":"all","lease":600,"max_attempts":3,"start":"all"}
+```
+
+The pull prints:
 
 ```text
 [slack#1] slack:C123 {"text":"Review PR 42"}

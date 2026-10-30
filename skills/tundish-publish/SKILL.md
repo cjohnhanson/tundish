@@ -71,6 +71,9 @@ The call runs the Rust library in-process. It accepts optional `db=`
 and `config=` paths. Use the same database as the subscriber's hook.
 The defaults match the CLI: `~/.local/state/tundish/tundish.db` and
 `~/.config/tundish/config.yml`.
+A file named with `config=` must exist; a missing file raises `ValueError`
+with `<path>: no such config file`. When `config=` is omitted, the fixed
+default config path may be absent; then every default applies.
 
 For a receiver that waits on an external service, keep that receiver
 running as its own process. The hook only needs to run `tundish pull`.

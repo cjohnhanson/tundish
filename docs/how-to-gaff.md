@@ -19,12 +19,26 @@ interval for the `inbox` subscription:
 tundish subscribe inbox --as reviewer --queue slack --consume on-ack --every 5m
 ```
 
+If `inbox` already reads `slack` and `reviewer` is already bound, this prints:
+
+```text
+replaced the rules of inbox
+rules: {"queue":"slack","select":"since_last_read","consume":"on_ack","share":"all","every":300,"lease":600,"max_attempts":3,"start":"all"}
+```
+
 With `--queue`, this command replaces all rules for `inbox`. If you have
 a filter, template, or other rules to keep, include their flags too.
 To bind another subscriber without changing the rules, omit `--queue`:
 
 ```sh
 tundish subscribe inbox --as maintainer
+```
+
+For a new binding, this prints:
+
+```text
+bound maintainer to inbox
+rules: {"queue":"slack","select":"since_last_read","consume":"on_ack","share":"all","every":300,"lease":600,"max_attempts":3,"start":"all"}
 ```
 
 ## Add the handler
@@ -56,7 +70,7 @@ To restrict the handler to a repository, add a `when` field to the entry:
 
 If you use another database, put `--db` and its absolute path in the
 command before `pull`. If you use another config file, add `--config`
-and its absolute path there too.
+and its absolute path there too. The named config file must exist.
 
 The handler's `every` counts tool calls. The subscription's `--every`
 counts time since the last pull that printed an item. With `--every 5m`,
@@ -64,6 +78,11 @@ counts time since the last pull that printed an item. With `--every 5m`,
 most once every five minutes. Between deliveries, the handler stays
 silent. An empty pull does not start a window. An idle session waits
 for its next hook event, even after five minutes pass.
+
+A bound subscriber with nothing due gets no output and exit 0. If the
+subscriber holds no subscription, `pull --due` exits 2 and prints
+`tundish: <who> holds no subscription, so nothing can be due: tundish subscribe <name> --as <who>`.
+Check `--as` and `--db` in the handler for a typo.
 
 ## Allow the handler in the working directory
 
