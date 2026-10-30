@@ -74,13 +74,15 @@ and its absolute path there too. The named config file must exist.
 
 The handler's `every` counts tool calls. The subscription's `--every`
 counts time since the last pull that printed an item. With `--every 5m`,
-`pull --due` prints this subscription's items and notices together at
-most once every five minutes. Between deliveries, the handler stays
-silent. An empty pull does not start a window. An idle session waits
+`pull --due` delivers this subscription's items at most once every five
+minutes. When it delivers no item, it omits the unacked and parked counts.
+Filter-error and retention-drop notices print once even without an item.
+An empty pull does not start a window. An idle session waits
 for its next hook event, even after five minutes pass.
 
-A bound subscriber with nothing due gets no output and exit 0. If the
-subscriber holds no subscription, `pull --due` exits 2 and prints
+A bound subscriber with nothing due and nothing to report gets no output
+and exit 0. If the subscriber holds no subscription, `pull --due` exits 2
+and prints
 `tundish: <who> holds no subscription, so nothing can be due: tundish subscribe <name> --as <who>`.
 Check `--as` and `--db` in the handler for a typo.
 

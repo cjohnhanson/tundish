@@ -146,7 +146,10 @@ tundish unsubscribe <name> --as <subscriber>
 ```
 
 Removes the subscriber's binding and cursor. The subscription remains,
-even after its last subscriber leaves. An absent binding exits 2.
+even after its last subscriber leaves. Prints
+`unbound <subscriber> from <name>; its read position was removed` and
+exits 0. A later `subscribe` of the same subscriber starts a new position
+under the subscription's `start` rule. An absent binding exits 2.
 
 ## pull
 
@@ -173,10 +176,12 @@ A pull prints and flushes the batch before committing delivery. A
 failure before commit leaves delivery uncommitted. The next pull can
 repeat printed items. Delivery is at least once.
 
-A due pull prints a subscription's notices only when it also delivers at
-least one item from that subscription. A bound subscriber with nothing
-due gets no output and exit 0. A named pull prints applicable notices
-even without new items.
+A due pull omits a subscription's unacked and parked counts when it
+delivers no item from that subscription. Filter-error and retention-drop
+notices print once even without an item, since each reports a one-time
+event. A bound subscriber with nothing due and nothing to report gets no
+output and exit 0. A named pull prints all applicable notices even
+without new items.
 Retention drop counts remain pending until a pull reports them.
 
 An `--every` window starts only after a pull that prints an item. This
@@ -198,7 +203,7 @@ do not fit wait for another pull under `since-last-read`.
 | `N unacked in <name> from earlier pulls: tundish list <queue> --unacked --subscription <name>` | Earlier matching items remain unacked under `share all` with `on-ack`. |
 | `N parked in <name> after M attempts: tundish list <queue> --unacked --subscription <name>` | The pull found items with no attempts left. |
 | `N items in <name> failed the filter: <error>` | The filter failed on these items. The line gives the first error. For one item it says `1 item`. |
-| `N unread items in <name> were dropped by retention` | Retention removed unread matching items for this subscriber. |
+| `N unread items in <name> were dropped by retention` | Retention removed unread matching items for this subscriber. For one item it says `1 unread item in <name> was dropped by retention`. |
 | `more in <name>: pull again` | The batch stopped before it finished scanning or delivering candidates. |
 
 The budget includes footers. Footers are not truncated. A long name,

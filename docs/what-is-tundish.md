@@ -121,8 +121,8 @@ position and can be removed by the count limit.
 
 An age limit makes a different choice. It removes old items even when
 a subscriber has not read them. tundish records the number of unread
-matching items lost. A named pull reports that count; a due pull waits
-until it also delivers an item from the subscription. The notice lets
+matching items lost. A named pull or a due pull reports that count once,
+even without delivering an item from the subscription. The notice lets
 a subscriber distinguish an empty queue from missing history.
 
 Retention runs on publish. With no daemon, an idle queue does not remove
