@@ -23,13 +23,14 @@ static DOCS: &[(&str, &str)] = diataxis::embedded_docs!();
 #[derive(Parser)]
 #[command(name = "tundish", version, about = ABOUT)]
 pub struct Args {
-    /// The database file. Without it, `database:` in the config, else
-    /// ~/.local/state/tundish/tundish.db.
-    #[arg(long, global = true)]
+    /// The database file, in place of `database:` in the config. A test
+    /// seam: printed commands assume the configured database.
+    #[arg(long, global = true, hide = true)]
     db: Option<PathBuf>,
 
-    /// Read the config from this file instead of ~/.config/tundish/config.yml.
-    #[arg(long, global = true)]
+    /// The config file, in place of ~/.config/tundish/config.yml. A
+    /// test seam.
+    #[arg(long, global = true, hide = true)]
     config: Option<PathBuf>,
 
     /// The clock, in Unix seconds. A test seam.
@@ -187,7 +188,7 @@ pub fn prime() -> String {
         "  tundish subscribe <name> --as <subscriber> [--queue <q>]",
         "  tundish pull <name> --as <subscriber>",
         "  tundish pull --due --as <subscriber>",
-        "  tundish ack <id> --as <subscriber>",
+        "  tundish ack <id> --as <subscriber> [--subscription <s>]",
         "  tundish show <id>",
         "  tundish status",
         "More: tundish --help; tundish docs",
@@ -386,11 +387,27 @@ fn dispatch(args: Args) -> Result<i32> {
             }
         },
         Command::Status => {
-            for s in store.status()? {
+            for s in store.status(now)? {
+                // The error text is JSON-quoted so a newline or tab in it
+                // cannot break the line.
+                let last_error = s
+                    .last_error
+                    .as_deref()
+                    .map(serde_json::to_string)
+                    .transpose()?
+                    .unwrap_or_default();
                 writeln!(
                     stdout,
-                    "{}\t{}\tqueue={}\tcursor={}\tunread={}\tnext_at={}\tdropped={}",
-                    s.subscription, s.subscriber, s.queue, s.cursor, s.unread, s.next_at, s.dropped
+                    "{}\t{}\tqueue={}\tcursor={}\tunread={}\tnext_at={}\tdropped={}\terrors={}\tparked={}\tlast_error={last_error}",
+                    s.subscription,
+                    s.subscriber,
+                    s.queue,
+                    s.cursor,
+                    s.unread,
+                    s.next_at,
+                    s.dropped,
+                    s.errors,
+                    s.parked
                 )?;
             }
         }

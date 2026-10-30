@@ -30,7 +30,11 @@ CREATE TABLE subscriptions (
   queue TEXT NOT NULL,
   rules TEXT NOT NULL,
   lwm INTEGER NOT NULL,
-  created_at INTEGER NOT NULL
+  created_at INTEGER NOT NULL,
+  dropped INTEGER NOT NULL DEFAULT 0,
+  errors INTEGER NOT NULL DEFAULT 0,
+  parked INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT
 );
 CREATE TABLE subscribers (
   subscription TEXT NOT NULL REFERENCES subscriptions(name) ON DELETE CASCADE,
@@ -39,6 +43,8 @@ CREATE TABLE subscribers (
   cursor INTEGER NOT NULL,
   next_at INTEGER NOT NULL DEFAULT 0,
   dropped INTEGER NOT NULL DEFAULT 0,
+  errors INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT,
   PRIMARY KEY (subscription, subscriber)
 );
 CREATE TABLE acks (
@@ -61,8 +67,38 @@ CREATE TABLE leases (
 /// Rows scanned per pull, so a pull holds the write lock briefly.
 const SCAN: i64 = 1000;
 
-/// The smallest byte budget a pull accepts.
-pub const MIN_BYTES: usize = 128;
+/// The longest subscription or subscriber name.
+pub const NAME_MAX: usize = 64;
+
+/// Digits in the largest count a status line prints: `i64::MAX`.
+const COUNT_DIGITS: usize = 19;
+
+/// The status line's fixed text: its prefix, nine `key=`s, the spaces
+/// between them, and the newline. 93 bytes.
+const STATUS_TEXT: usize = "tundish: subscription= subscriber= delivered= more= unacked= parked= errors= dropped= lease=\n".len();
+
+/// The longest status line for two names: the fixed text, a one-digit
+/// `more`, the names, and six counts of at most `COUNT_DIGITS` digits.
+const fn status_max(name: usize, subscriber: usize) -> usize {
+    STATUS_TEXT + 1 + name + subscriber + 6 * COUNT_DIGITS
+}
+
+/// The longest status line: 93 + 1 + 64 + 64 + 6 × 19 = 336 bytes.
+pub const STATUS_MAX: usize = status_max(NAME_MAX, NAME_MAX);
+
+/// The cut pointer's fixed text, ` … tundish show ` and the newline.
+const POINTER_TEXT: usize = " … tundish show \n".len();
+
+/// The smallest slice of a first item: the longest cut pointer
+/// (19 bytes of text, a 19-digit id: 38 bytes) and 26 bytes of the item.
+const ITEM_SLICE: usize = 64;
+
+/// The smallest byte budget a pull accepts: the longest status line and
+/// the smallest item slice, so the first candidate always fits with an
+/// uncut pointer. 336 + 64 = 400 bytes.
+pub const MIN_BYTES: usize = STATUS_MAX + ITEM_SLICE;
+
+const _: () = assert!(POINTER_TEXT + COUNT_DIGITS < ITEM_SLICE);
 
 /// How long a queue keeps items.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
@@ -159,6 +195,9 @@ pub struct SubscriberState {
     pub unread: i64,
     pub next_at: i64,
     pub dropped: i64,
+    pub errors: i64,
+    pub parked: i64,
+    pub last_error: Option<String>,
 }
 
 /// The store.
@@ -283,11 +322,8 @@ impl Store {
         rules: Option<Rules>,
         now: i64,
     ) -> Result<Subscribed> {
-        if subscriber.is_empty() || name.is_empty() {
-            return Err(Error::Usage(
-                "a subscription and a subscriber need names".into(),
-            ));
-        }
+        check_name("subscription", name)?;
+        check_name("subscriber", subscriber)?;
         let tx = self.write()?;
         let mut change = Change::None;
         if let Some(r) = &rules {
@@ -334,13 +370,15 @@ impl Store {
             }
             if matches!(change, Change::Moved { .. }) {
                 tx.execute(
-                    "UPDATE subscriptions SET lwm = ?2 WHERE name = ?1",
+                    "UPDATE subscriptions SET lwm = ?2, dropped = 0, errors = 0, parked = 0
+                     WHERE name = ?1",
                     params![name, start],
                 )?;
                 tx.execute("DELETE FROM acks WHERE subscription = ?1", [name])?;
                 tx.execute("DELETE FROM leases WHERE subscription = ?1", [name])?;
                 tx.execute(
-                    "UPDATE subscribers SET origin = ?2, cursor = ?2, dropped = 0 WHERE subscription = ?1",
+                    "UPDATE subscribers SET origin = ?2, cursor = ?2, dropped = 0, errors = 0
+                     WHERE subscription = ?1",
                     params![name, start],
                 )?;
             }
@@ -393,13 +431,16 @@ impl Store {
     ) -> Result<usize> {
         check_budget(opts.max_bytes)?;
         let tx = self.write()?;
-        let (text, n) = pull_in(&tx, name, subscriber, opts, opts.max_bytes, true, false)?;
+        let (text, n) = pull_in(&tx, name, subscriber, opts, opts.max_bytes, true)?;
         finish(tx, &text, opts, out)?;
         Ok(n)
     }
 
     /// Pull every due subscription of `subscriber` in one transaction,
     /// sharing one byte budget: all of it is marked delivered, or none.
+    /// The budget holds one status line per subscription pulled; the
+    /// subscriptions that do not fit wait for the next pull, first in
+    /// line since they did not deliver.
     pub fn pull_due(
         &mut self,
         subscriber: &str,
@@ -417,16 +458,23 @@ impl Store {
                 "{subscriber} holds no subscription, so nothing can be due: tundish subscribe <name> --as {subscriber}"
             )));
         }
-        let names = self.due(subscriber, opts.now)?;
+        let mut chosen: Vec<(String, usize)> = Vec::new();
+        let mut reserved = 0;
+        for name in self.due(subscriber, opts.now)? {
+            let line = status_max(name.len(), subscriber.len());
+            if reserved + line + ITEM_SLICE > opts.max_bytes {
+                break;
+            }
+            reserved += line;
+            chosen.push((name, line));
+        }
         let tx = self.write()?;
         let mut text = String::new();
         let mut n = 0;
-        for name in names {
-            let left = opts.max_bytes.saturating_sub(text.len());
-            if left < MIN_BYTES / 2 {
-                break;
-            }
-            let (t, k) = pull_in(&tx, &name, subscriber, opts, left, text.is_empty(), true)?;
+        for (i, (name, _)) in chosen.iter().enumerate() {
+            let later: usize = chosen[i + 1..].iter().map(|(_, line)| line).sum();
+            let left = opts.max_bytes.saturating_sub(text.len() + later);
+            let (t, k) = pull_in(&tx, name, subscriber, opts, left, text.is_empty())?;
             text.push_str(&t);
             n += k;
         }
@@ -603,21 +651,28 @@ impl Store {
         Ok(out)
     }
 
-    /// Every subscriber's position. For a `share: one` subscription the
-    /// position and the unread count are the subscription's.
-    pub fn status(&self) -> Result<Vec<SubscriberState>> {
+    /// Every subscriber's position at clock `now`. For a `share: one`
+    /// subscription the position, the unread count, and the unreported
+    /// counts are the subscription's. `parked` counts the items parked
+    /// now; `dropped` and `errors` count what no pull has reported yet.
+    pub fn status(&self, now: i64) -> Result<Vec<SubscriberState>> {
         let mut st = self.conn.prepare(
             "SELECT s.subscription, s.subscriber, p.queue,
                CASE WHEN json_extract(p.rules, '$.share') = 'one' THEN p.lwm ELSE s.cursor END AS pos,
-               s.next_at, s.dropped,
+               s.next_at,
+               CASE WHEN json_extract(p.rules, '$.share') = 'one' THEN p.dropped ELSE s.dropped END,
                CASE WHEN json_extract(p.rules, '$.share') = 'one'
                  THEN (SELECT count(*) FROM items i WHERE i.queue = p.queue AND i.id > p.lwm
                          AND NOT EXISTS (SELECT 1 FROM acks a WHERE a.subscription = p.name AND a.item = i.id))
-                 ELSE (SELECT count(*) FROM items i WHERE i.queue = p.queue AND i.id > s.cursor) END
+                 ELSE (SELECT count(*) FROM items i WHERE i.queue = p.queue AND i.id > s.cursor) END,
+               CASE WHEN json_extract(p.rules, '$.share') = 'one' THEN p.errors ELSE s.errors END,
+               (SELECT count(*) FROM leases l WHERE l.subscription = p.name
+                  AND l.attempts >= json_extract(p.rules, '$.max_attempts') AND l.expires_at <= ?1),
+               CASE WHEN json_extract(p.rules, '$.share') = 'one' THEN p.last_error ELSE s.last_error END
              FROM subscribers s JOIN subscriptions p ON p.name = s.subscription
              ORDER BY s.subscription, s.subscriber",
         )?;
-        let rows = st.query_map([], |r| {
+        let rows = st.query_map([now], |r| {
             Ok(SubscriberState {
                 subscription: r.get(0)?,
                 subscriber: r.get(1)?,
@@ -626,6 +681,9 @@ impl Store {
                 next_at: r.get(4)?,
                 dropped: r.get(5)?,
                 unread: r.get(6)?,
+                errors: r.get(7)?,
+                parked: r.get(8)?,
+                last_error: r.get(9)?,
             })
         })?;
         Ok(rows.collect::<std::result::Result<_, _>>()?)
@@ -657,79 +715,64 @@ fn finish(
     Ok(())
 }
 
-/// What one pull found besides the items it printed.
-#[derive(Default)]
-struct Notes {
-    open: i64,
-    parked: i64,
-    filter_errors: i64,
-    first_error: Option<String>,
-    dropped: i64,
+/// Refuse a name the status line cannot carry: 1 to `NAME_MAX` bytes
+/// of `A-Z a-z 0-9 . _ : -`, so the line has no spaces, newlines, or
+/// `=` inside a field and a fixed maximum length.
+fn check_name(kind: &str, name: &str) -> Result<()> {
+    let ok = (1..=NAME_MAX).contains(&name.len())
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"._:-".contains(&b));
+    if ok {
+        Ok(())
+    } else {
+        Err(Error::Usage(format!(
+            "a {kind} name is 1 to {NAME_MAX} of A-Z a-z 0-9 . _ : -, not {name:?}"
+        )))
+    }
 }
 
-fn footer(
-    rules: &Rules,
-    name: &str,
-    subscriber: &str,
-    notes: &Notes,
-    delivered: bool,
+/// One subscription's status in one pull. Each field is a count or a
+/// flag, so the line never carries payload or error text.
+#[derive(Debug, Default)]
+struct Status {
+    delivered: usize,
     more: bool,
-) -> String {
-    let mut f = String::new();
-    if delivered && rules.consume == Consume::OnAck {
-        f.push_str(&format!(
-            "ack: tundish ack <id> --as {subscriber} --subscription {name}"
-        ));
-        if rules.share == Share::One {
-            f.push_str(&format!(" (leases end in {}s)", rules.lease));
-        }
-        f.push('\n');
-    }
-    if notes.open > 0 {
-        f.push_str(&format!(
-            "{} unacked in {name} from earlier pulls: tundish list {} --unacked --subscription {name}\n",
-            notes.open, rules.queue
-        ));
-    }
-    if notes.parked > 0 {
-        f.push_str(&format!(
-            "{} parked in {name} after {} attempts: tundish list {} --unacked --subscription {name}\n",
-            notes.parked, rules.max_attempts, rules.queue
-        ));
-    }
-    if notes.filter_errors > 0 {
-        f.push_str(&format!(
-            "{} {} in {name} failed the filter: {}\n",
-            notes.filter_errors,
-            if notes.filter_errors == 1 {
-                "item"
-            } else {
-                "items"
-            },
-            notes.first_error.as_deref().unwrap_or("")
-        ));
-    }
-    if notes.dropped > 0 {
-        f.push_str(&if notes.dropped == 1 {
-            format!("1 unread item in {name} was dropped by retention\n")
-        } else {
-            format!(
-                "{} unread items in {name} were dropped by retention\n",
-                notes.dropped
-            )
-        });
-    }
-    if more {
-        f.push_str(&format!("more in {name}: pull again\n"));
-    }
-    f
+    /// Items shown in earlier pulls and not acked; set only alongside
+    /// delivered items.
+    unacked: i64,
+    /// One-time counts, reported by the pull that zeroes them.
+    parked: i64,
+    errors: i64,
+    dropped: i64,
+    /// Seconds the delivered items stay leased, or 0.
+    lease: i64,
 }
 
-/// One subscription's batch, recorded in `tx`, returned as text that
-/// fits `budget` with its footer. Only the first item of a whole
-/// output (`may_cut`) is cut to fit. A `quiet` pull that delivers no
-/// item prints only the notices that happen once, so a hook does not
-/// repeat the unacked and parked counts.
+impl Status {
+    /// Whether the subscription prints anything in this pull.
+    fn reports(&self) -> bool {
+        self.delivered > 0 || self.more || self.parked > 0 || self.errors > 0 || self.dropped > 0
+    }
+
+    fn line(&self, name: &str, subscriber: &str) -> String {
+        format!(
+            "tundish: subscription={name} subscriber={subscriber} delivered={} more={} unacked={} parked={} errors={} dropped={} lease={}\n",
+            self.delivered,
+            u8::from(self.more),
+            self.unacked,
+            self.parked,
+            self.errors,
+            self.dropped,
+            self.lease
+        )
+    }
+}
+
+/// One subscription's batch, recorded in `tx`, returned as its status
+/// line and item lines in at most `budget` bytes, or as nothing when it
+/// has nothing to report. Only the first item of a whole output
+/// (`may_cut`) is cut to fit.
 fn pull_in(
     tx: &Connection,
     name: &str,
@@ -737,18 +780,17 @@ fn pull_in(
     opts: &PullOpts,
     budget: usize,
     may_cut: bool,
-    quiet: bool,
 ) -> Result<(String, usize)> {
     let rules = load_rules(tx, name)?;
-    let state: Option<(i64, i64, i64)> = tx
+    let state: Option<(i64, i64, i64, i64)> = tx
         .query_row(
-            "SELECT origin, cursor, dropped FROM subscribers
+            "SELECT origin, cursor, dropped, errors FROM subscribers
              WHERE subscription = ?1 AND subscriber = ?2",
             params![name, subscriber],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
         )
         .optional()?;
-    let Some((origin, cursor, dropped)) = state else {
+    let Some((origin, cursor, s_dropped, s_errors)) = state else {
         return Err(Error::NotSubscribed {
             subscription: name.into(),
             subscriber: subscriber.into(),
@@ -756,10 +798,10 @@ fn pull_in(
     };
     let filter = rules.filter.as_deref().map(Expr::compile).transpose()?;
     let template = rules.template.as_deref().map(Expr::compile).transpose()?;
-    let lwm: i64 = tx.query_row(
-        "SELECT lwm FROM subscriptions WHERE name = ?1",
+    let (lwm, p_dropped, p_errors, p_parked): (i64, i64, i64, i64) = tx.query_row(
+        "SELECT lwm, dropped, errors, parked FROM subscriptions WHERE name = ?1",
         [name],
-        |r| r.get(0),
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
     )?;
     let from = match rules.share {
         Share::All => cursor,
@@ -774,10 +816,10 @@ fn pull_in(
         None
     };
 
-    let mut notes = Notes {
-        dropped,
-        ..Notes::default()
-    };
+    // Rows the filter failed on, and parked rows. Each counts once, in
+    // the pull whose committed position moves past it.
+    let mut errors: Vec<(i64, String)> = Vec::new();
+    let mut parked: Vec<i64> = Vec::new();
     let mut matched: Vec<bool> = Vec::with_capacity(rows.len());
     let mut candidates: Vec<&Row> = Vec::new();
     for row in &rows {
@@ -786,8 +828,7 @@ fn pull_in(
             Some(f) => match f.matches(&row.value()?) {
                 Ok(b) => b,
                 Err(e) => {
-                    notes.filter_errors += 1;
-                    notes.first_error.get_or_insert_with(|| e.to_string());
+                    errors.push((row.id, e.to_string()));
                     false
                 }
             },
@@ -805,7 +846,7 @@ fn pull_in(
                     continue;
                 }
                 if attempts >= rules.max_attempts {
-                    notes.parked += 1;
+                    parked.push(row.id);
                     continue;
                 }
             }
@@ -817,13 +858,11 @@ fn pull_in(
     }
     // `latest` candidates are newest first, so the budget keeps the
     // newest; the lines are printed oldest first below.
-    if rules.consume == Consume::OnAck && rules.share == Share::All {
-        notes.open = count_open(tx, name, &rules, filter.as_ref(), origin, cursor)?;
-    }
 
-    // Reserve the largest footer this pull can print, then fit items.
-    let reserve = footer(&rules, name, subscriber, &notes, true, true).len();
-    let room = budget.saturating_sub(reserve);
+    // Reserve the longest status line these names can print, then fit
+    // items in the rest.
+    let room = budget.saturating_sub(status_max(name.len(), subscriber.len()));
+    let tagged = rules.consume == Consume::OnAck;
     let limit = rules.limit.unwrap_or(usize::MAX);
     let mut lines: Vec<String> = Vec::new();
     let mut used = 0;
@@ -834,10 +873,10 @@ fn pull_in(
             stopped = true;
             break;
         }
-        let mut line = render(template.as_ref(), row)?;
+        let mut line = render(template.as_ref(), row, tagged)?;
         line.push('\n');
         if used + line.len() > room {
-            if delivered.is_empty() && may_cut && room > 0 {
+            if delivered.is_empty() && may_cut && room >= ITEM_SLICE {
                 line = cut(&line, room, row.id);
             } else {
                 stopped = true;
@@ -852,15 +891,29 @@ fn pull_in(
         lines.reverse();
         delivered.reverse();
     }
-    let mut text = lines.concat();
-    // A `latest` pull skips older items by design, so a budget stop
-    // there has nothing to pull again.
-    let more = !latest && (stopped || window_full);
+    // A budget stop before any delivery: the position stays, so the
+    // items wait for a pull with room.
+    let starved = stopped && delivered.is_empty();
+    let mut status = Status {
+        delivered: delivered.len(),
+        // A `latest` pull that delivered skips older items by design,
+        // so a budget stop there has nothing to pull again.
+        more: starved || (!latest && (stopped || window_full)),
+        ..Status::default()
+    };
+    if !delivered.is_empty() && rules.consume == Consume::OnAck {
+        match rules.share {
+            Share::All => {
+                status.unacked = count_open(tx, name, &rules, filter.as_ref(), origin, cursor)?;
+            }
+            Share::One => status.lease = rules.lease,
+        }
+    }
 
-    // Record the delivery.
-    match rules.share {
+    // Record the delivery, and the position it commits.
+    let position = match rules.share {
         Share::All => {
-            let new_cursor = if latest {
+            let new_cursor = if latest && !starved {
                 head.unwrap_or(cursor)
             } else if stopped {
                 delivered.last().copied().unwrap_or(cursor)
@@ -871,6 +924,7 @@ fn pull_in(
                 "UPDATE subscribers SET cursor = ?3 WHERE subscription = ?1 AND subscriber = ?2",
                 params![name, subscriber, new_cursor],
             )?;
+            new_cursor
         }
         Share::One => {
             for id in &delivered {
@@ -898,22 +952,36 @@ fn pull_in(
                 "UPDATE subscriptions SET lwm = ?2 WHERE name = ?1",
                 params![name, new_lwm],
             )?;
+            new_lwm
         }
-    }
-    if quiet && delivered.is_empty() {
-        // The open and parked counts repeat on every pull; filter errors
-        // and drops are reported once, so they still print.
-        notes.open = 0;
-        notes.parked = 0;
-        if notes.filter_errors == 0 && notes.dropped == 0 {
-            return Ok((String::new(), 0));
+    };
+
+    // Count what the committed position moved past, report the stored
+    // counts with it, and zero them in the same commit.
+    let passed: Vec<&(i64, String)> = errors.iter().filter(|(id, _)| *id <= position).collect();
+    let last_error = passed.iter().max_by_key(|(id, _)| *id).map(|(_, e)| e);
+    let new_errors = passed.len() as i64;
+    match rules.share {
+        Share::All => {
+            status.errors = s_errors + new_errors;
+            status.dropped = s_dropped;
+            tx.execute(
+                "UPDATE subscribers SET errors = 0, dropped = 0, last_error = coalesce(?3, last_error)
+                 WHERE subscription = ?1 AND subscriber = ?2",
+                params![name, subscriber, last_error],
+            )?;
         }
-    }
-    if dropped > 0 {
-        tx.execute(
-            "UPDATE subscribers SET dropped = 0 WHERE subscription = ?1 AND subscriber = ?2",
-            params![name, subscriber],
-        )?;
+        Share::One => {
+            status.errors = p_errors + new_errors;
+            status.dropped = p_dropped;
+            status.parked = p_parked + parked.iter().filter(|id| **id <= position).count() as i64;
+            tx.execute(
+                "UPDATE subscriptions SET errors = 0, dropped = 0, parked = 0,
+                   last_error = coalesce(?2, last_error)
+                 WHERE name = ?1",
+                params![name, last_error],
+            )?;
+        }
     }
     if !delivered.is_empty() {
         tx.execute(
@@ -921,24 +989,23 @@ fn pull_in(
             params![name, subscriber, opts.now + rules.every.unwrap_or(0)],
         )?;
     }
-    text.push_str(&footer(
-        &rules,
-        name,
-        subscriber,
-        &notes,
-        !delivered.is_empty(),
-        more,
-    ));
+    if !status.reports() {
+        return Ok((String::new(), 0));
+    }
+    let text = status.line(name, subscriber) + &lines.concat();
     Ok((text, delivered.len()))
 }
 
 /// The template's text, or the plain form when the template yields
-/// nothing or fails on this item.
-fn render(template: Option<&Expr>, row: &Row) -> Result<String> {
+/// nothing or fails on this item. A `tagged` line (an on-ack
+/// subscription's) starts with `[queue#id] `, so an agent can ack it
+/// under any template.
+fn render(template: Option<&Expr>, row: &Row, tagged: bool) -> Result<String> {
     let Some(t) = template else {
         return Ok(row.plain());
     };
     Ok(match t.render(&row.value()?) {
+        Ok(s) if !s.is_empty() && tagged => format!("[{}#{}] {s}", row.queue, row.id),
         Ok(s) if !s.is_empty() => s,
         Ok(_) => row.plain(),
         Err(e) => format!("{} (template error: {e})", row.plain()),
@@ -1089,18 +1156,12 @@ fn count_open(
     Ok(n)
 }
 
-/// Cut a rendered item to `room` bytes, ending with a pointer to the
-/// whole item. The pointer itself is cut when `room` is smaller.
+/// Cut a rendered item to `room` bytes, ending with a whole pointer to
+/// the whole item. `room` is at least `ITEM_SLICE`, which holds the
+/// longest pointer.
 fn cut(line: &str, room: usize, id: i64) -> String {
     let tail = format!(" … tundish show {id}\n");
-    if room <= tail.len() {
-        let mut end = room.saturating_sub(1);
-        while !tail.is_char_boundary(end) {
-            end -= 1;
-        }
-        return format!("{}\n", &tail[..end]);
-    }
-    let mut end = (room - tail.len()).min(line.len());
+    let mut end = room.saturating_sub(tail.len()).min(line.len());
     while !line.is_char_boundary(end) {
         end -= 1;
     }
@@ -1157,13 +1218,15 @@ fn trim(tx: &Connection, queue: &str, now: i64, r: Retention) -> Result<()> {
     Ok(())
 }
 
-/// Before a trim to `cutoff`, add to each subscriber's `dropped` the
-/// items it has not received that its filter would deliver, and move
-/// its position to the cutoff.
+/// Before a trim to `cutoff`, count the items each position has not
+/// received that its filter would deliver, and move the position to the
+/// cutoff. A `share: one` subscription has one position and one count,
+/// on its own row; a `share: all` subscriber has its own.
 fn count_drops(tx: &Connection, queue: &str, cutoff: i64) -> Result<()> {
     let mut st = tx.prepare(
         "SELECT p.name, p.rules, p.lwm, s.subscriber, s.cursor
-         FROM subscriptions p JOIN subscribers s ON s.subscription = p.name WHERE p.queue = ?1",
+         FROM subscriptions p JOIN subscribers s ON s.subscription = p.name WHERE p.queue = ?1
+         ORDER BY p.name, s.subscriber",
     )?;
     let subs: Vec<(String, String, i64, String, i64)> = st
         .query_map([queue], |r| {
@@ -1171,14 +1234,21 @@ fn count_drops(tx: &Connection, queue: &str, cutoff: i64) -> Result<()> {
         })?
         .collect::<std::result::Result<_, _>>()?;
     drop(st);
+    let mut counted: Option<String> = None;
     for (name, rules, lwm, subscriber, cursor) in subs {
         let rules: Rules = serde_json::from_str(&rules)?;
-        let pos = if rules.share == Share::One {
-            lwm
-        } else {
-            cursor
-        };
+        let one = rules.share == Share::One;
+        let pos = if one { lwm } else { cursor };
         if pos >= cutoff {
+            continue;
+        }
+        if one && counted.as_deref() == Some(name.as_str()) {
+            // The subscription's count is in; move this subscriber too.
+            tx.execute(
+                "UPDATE subscribers SET cursor = max(cursor, ?3)
+                 WHERE subscription = ?1 AND subscriber = ?2",
+                params![name, subscriber, cutoff],
+            )?;
             continue;
         }
         let filter = rules.filter.as_deref().map(Expr::compile).transpose()?;
@@ -1200,17 +1270,63 @@ fn count_drops(tx: &Connection, queue: &str, cutoff: i64) -> Result<()> {
                 lost += 1;
             }
         }
-        tx.execute(
-            "UPDATE subscribers SET dropped = dropped + ?3, cursor = max(cursor, ?4)
-             WHERE subscription = ?1 AND subscriber = ?2",
-            params![name, subscriber, lost, cutoff],
-        )?;
-        if rules.share == Share::One {
+        if one {
+            // The lwm moves after the loop, so each row here reads the
+            // old one; `counted` keeps the count to one per subscription.
             tx.execute(
-                "UPDATE subscriptions SET lwm = max(lwm, ?2) WHERE name = ?1",
-                params![name, cutoff],
+                "UPDATE subscriptions SET dropped = dropped + ?2 WHERE name = ?1",
+                params![name, lost],
+            )?;
+            tx.execute(
+                "UPDATE subscribers SET cursor = max(cursor, ?3)
+                 WHERE subscription = ?1 AND subscriber = ?2",
+                params![name, subscriber, cutoff],
+            )?;
+            counted = Some(name);
+        } else {
+            tx.execute(
+                "UPDATE subscribers SET dropped = dropped + ?3, cursor = max(cursor, ?4)
+                 WHERE subscription = ?1 AND subscriber = ?2",
+                params![name, subscriber, lost, cutoff],
             )?;
         }
     }
+    tx.execute(
+        "UPDATE subscriptions SET lwm = max(lwm, ?2)
+         WHERE queue = ?1 AND json_extract(rules, '$.share') = 'one'
+           AND EXISTS (SELECT 1 FROM subscribers s WHERE s.subscription = name)",
+        params![queue, cutoff],
+    )?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn status_max_is_the_longest_line_the_formatter_prints() {
+        let name = "s".repeat(NAME_MAX);
+        let who = "w".repeat(NAME_MAX);
+        let max = Status {
+            delivered: i64::MAX as usize,
+            more: true,
+            unacked: i64::MAX,
+            parked: i64::MAX,
+            errors: i64::MAX,
+            dropped: i64::MAX,
+            lease: i64::MAX,
+        };
+        assert_eq!(max.line(&name, &who).len(), STATUS_MAX);
+        assert_eq!(STATUS_MAX, 336);
+        assert_eq!(MIN_BYTES, 400);
+    }
+
+    #[test]
+    fn the_longest_pointer_fits_an_item_slice() {
+        let line = "x".repeat(1000);
+        let cut = cut(&line, ITEM_SLICE, i64::MAX);
+        assert_eq!(cut.len(), ITEM_SLICE);
+        assert!(cut.ends_with(&format!(" … tundish show {}\n", i64::MAX)));
+    }
 }

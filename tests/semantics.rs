@@ -152,14 +152,12 @@ fn all_on_ack_shows_an_item_once_and_counts_what_is_open() {
     let p = publish(&mut s, "q", 2, 1);
     let first = pull(&mut s, "work", "a", 2);
     assert_eq!(ids(&first), p);
-    assert!(
-        first.contains("tundish ack"),
-        "the batch says how to ack: {first}"
-    );
     s.ack(p[0], "a", 3).unwrap();
-    let second = pull(&mut s, "work", "a", 4);
-    assert_eq!(ids(&second), Vec::<i64>::new());
-    assert!(second.contains("1 unacked"), "{second}");
+    assert_eq!(pull(&mut s, "work", "a", 4), "", "nothing new to show");
+    let q = publish(&mut s, "q", 1, 5);
+    let third = pull(&mut s, "work", "a", 6);
+    assert_eq!(ids(&third), q);
+    assert!(third.contains(" unacked=1 "), "{third}");
 }
 
 #[test]
@@ -214,7 +212,7 @@ fn one_on_ack_parks_an_item_after_max_attempts() {
     assert_eq!(ids(&pull(&mut s, "jobs", "a", 20)), p);
     let third = pull(&mut s, "jobs", "a", 40);
     assert_eq!(ids(&third), Vec::<i64>::new());
-    assert!(third.contains("1 parked"), "{third}");
+    assert!(third.contains(" parked=1 "), "{third}");
 }
 
 #[test]
@@ -226,9 +224,13 @@ fn an_oversize_first_item_is_cut_and_the_cursor_moves() {
         .publish("q", None, &json!({"text": big}), 1, Retention::default())
         .unwrap();
     let mut opts = PullOpts::at(2);
-    opts.max_bytes = 200;
+    opts.max_bytes = tundish::store::MIN_BYTES;
     let out = pull_with(&mut s, "feed", "a", opts);
-    assert!(out.len() <= 200, "{} bytes", out.len());
+    assert!(
+        out.len() <= tundish::store::MIN_BYTES,
+        "{} bytes",
+        out.len()
+    );
     assert!(out.contains(&format!("tundish show {id}")), "{out}");
     assert_eq!(pull(&mut s, "feed", "a", 3), "");
 }
@@ -239,7 +241,7 @@ fn the_byte_budget_stops_before_an_item_that_does_not_fit() {
     s.subscribe("feed", "a", Some(Rules::new("q")), 0).unwrap();
     let p = publish(&mut s, "q", 20, 1);
     let mut opts = PullOpts::at(2);
-    opts.max_bytes = 300;
+    opts.max_bytes = 600;
     let first = ids(&pull_with(&mut s, "feed", "a", opts));
     assert!(!first.is_empty() && first.len() < 20);
     let rest = ids(&pull(&mut s, "feed", "a", 3));
@@ -323,7 +325,10 @@ fn retention_never_trims_past_an_unread_cursor_except_by_age() {
     };
     s.publish("q", None, &json!({"n": 10}), 100, aged).unwrap();
     let out = pull(&mut s, "feed", "a", 101);
-    assert!(out.contains("dropped"), "forced drops are reported: {out}");
+    assert!(
+        out.contains(" dropped=1 "),
+        "forced drops are reported: {out}"
+    );
 }
 
 #[test]
@@ -333,7 +338,13 @@ fn a_custom_template_renders_each_item() {
     r.template = Some(r##""#\(.id) n=\(.payload.n)""##.into());
     s.subscribe("feed", "a", Some(r), 0).unwrap();
     let p = publish(&mut s, "q", 1, 1);
-    assert_eq!(pull(&mut s, "feed", "a", 2), format!("#{} n=0\n", p[0]));
+    assert_eq!(
+        pull(&mut s, "feed", "a", 2),
+        format!(
+            "tundish: subscription=feed subscriber=a delivered=1 more=0 unacked=0 parked=0 errors=0 dropped=0 lease=0\n#{} n=0\n",
+            p[0]
+        )
+    );
 }
 
 fn pull_due(s: &mut Store, who: &str, opts: PullOpts) -> String {
@@ -343,7 +354,7 @@ fn pull_due(s: &mut Store, who: &str, opts: PullOpts) -> String {
 }
 
 #[test]
-fn a_due_pull_prints_notices_only_with_new_items() {
+fn the_unacked_count_prints_only_with_delivered_items() {
     let (_d, mut s) = store();
     let mut r = Rules::new("q");
     r.consume = Consume::OnAck;
@@ -355,24 +366,25 @@ fn a_due_pull_prints_notices_only_with_new_items() {
         assert_eq!(
             pull_due(&mut s, "a", PullOpts::at(now)),
             "",
-            "an unacked notice alone is not a delivery"
+            "an unacked count alone is not a delivery"
         );
     }
-    assert!(
-        pull(&mut s, "inbox", "a", 403).contains("unacked"),
-        "a named pull still reports open items"
+    assert_eq!(
+        pull(&mut s, "inbox", "a", 403),
+        "",
+        "a named pull follows the same rule"
     );
     let q = publish(&mut s, "q", 1, 404);
     let out = pull_due(&mut s, "a", PullOpts::at(405));
     assert_eq!(ids(&out), q);
     assert!(
-        out.contains("unacked"),
-        "the notice rides with items: {out}"
+        out.contains(" unacked=1 "),
+        "the count rides with items: {out}"
     );
 }
 
 #[test]
-fn a_due_pull_reports_filter_errors_even_with_no_items() {
+fn a_due_pull_reports_filter_errors_once_even_with_no_items() {
     let (_d, mut s) = store();
     let mut r = Rules::new("q");
     r.filter = Some(".payload.a.b == 1".into());
@@ -381,9 +393,10 @@ fn a_due_pull_reports_filter_errors_even_with_no_items() {
         .unwrap();
     let out = pull_due(&mut s, "a", PullOpts::at(2));
     assert!(
-        out.contains("failed the filter"),
+        out.contains(" delivered=0 ") && out.contains(" errors=1 "),
         "silently skipped: {out:?}"
     );
+    assert_eq!(pull_due(&mut s, "a", PullOpts::at(3)), "", "reported once");
 }
 
 #[test]
@@ -413,7 +426,8 @@ fn a_due_pull_does_not_starve_later_subscriptions() {
     let mut seen = Vec::new();
     for now in [2, 3] {
         let mut opts = PullOpts::at(now);
-        opts.max_bytes = 300;
+        // Room for one subscription's status line and items per pull.
+        opts.max_bytes = tundish::store::MIN_BYTES;
         seen.extend(ids(&pull_due(&mut s, "z", opts)));
     }
     assert!(seen.contains(&b[0]), "b1 waited behind a1: {seen:?}");
@@ -431,18 +445,20 @@ fn latest_under_a_tight_budget_keeps_the_newest() {
             s.publish(
                 "q",
                 None,
-                &json!({"n": i, "pad": "x".repeat(40)}),
+                &json!({"n": i, "pad": "x".repeat(100)}),
                 1,
                 Retention::default(),
             )
             .unwrap()
         })
         .collect();
+    // Each item line is 123 bytes; the status line reserve for feed and
+    // a is 213. 513 bytes hold two items, not three.
     let mut opts = PullOpts::at(2);
-    opts.max_bytes = 160;
+    opts.max_bytes = 513;
     let out = pull_with(&mut s, "feed", "a", opts);
     assert_eq!(ids(&out), p[3..].to_vec(), "{out}");
-    assert!(!out.contains("pull again"), "{out}");
+    assert!(out.contains(" more=0 "), "{out}");
 }
 
 #[test]

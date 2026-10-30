@@ -107,7 +107,10 @@ fn a_move_resets_acks_leases_and_pending_drops() {
     feed.queue = "b".into();
     s.subscribe("feed", "f", Some(feed), 101).unwrap();
     let out = pull(&mut s, "feed", "f", 102);
-    assert!(!out.contains("dropped"), "a drop from the old queue: {out}");
+    assert!(
+        out.contains(" dropped=0 "),
+        "a drop from the old queue: {out}"
+    );
 }
 
 #[test]
@@ -129,7 +132,7 @@ fn acked_items_are_not_counted_as_drops() {
     };
     s.publish("q", None, &json!({"n": 3}), 100, aged).unwrap();
     let out = pull(&mut s, "work", "a", 101);
-    assert!(out.contains("1 unread item in work was dropped"), "{out}");
+    assert!(out.contains(" dropped=1 "), "{out}");
 }
 
 #[test]
@@ -142,7 +145,7 @@ fn a_parked_item_does_not_hold_retention() {
     s.subscribe("work", "w", Some(r), 0).unwrap();
     put(&mut s, "q", 1, 0);
     pull(&mut s, "work", "w", 1);
-    assert!(pull(&mut s, "work", "w", 5).contains("parked"));
+    assert!(pull(&mut s, "work", "w", 5).contains(" parked=1 "));
     let later = vec![put(&mut s, "q", 2, 6), put(&mut s, "q", 3, 6)];
     pull(&mut s, "work", "w", 7);
     for id in later {
@@ -172,7 +175,59 @@ fn a_due_pull_reports_a_drop_even_with_no_items() {
         .unwrap();
     let out = pull_due(&mut s, "a", &PullOpts::at(101));
     assert!(ids(&out).is_empty(), "{out}");
-    assert!(out.contains("1 unread item in feed was dropped"), "{out}");
+    assert!(out.contains(" dropped=1 "), "{out}");
+}
+
+#[test]
+fn a_share_all_subscription_moved_to_a_queue_with_lower_ids_reads_it_all() {
+    let (_d, mut s) = store();
+    let b = put(&mut s, "b", 1, 1);
+    put(&mut s, "a", 2, 1);
+    put(&mut s, "a", 3, 1);
+    s.subscribe("feed", "w", Some(Rules::new("a")), 2).unwrap();
+    assert_eq!(ids(&pull(&mut s, "feed", "w", 3)).len(), 2);
+    s.subscribe("feed", "w", Some(Rules::new("b")), 4).unwrap();
+    assert_eq!(ids(&pull(&mut s, "feed", "w", 5)), vec![b]);
+}
+
+#[test]
+fn an_expired_lease_under_max_attempts_holds_the_lwm_when_nothing_is_delivered() {
+    let (_d, mut s) = store();
+    // `big` fills a due pull, so `work` delivers nothing in it.
+    s.subscribe("big", "z", Some(Rules::new("big")), 0).unwrap();
+    let mut r = on_ack("q");
+    r.share = Share::One;
+    r.lease = 10;
+    r.max_attempts = 3;
+    s.subscribe("work", "z", Some(r), 0).unwrap();
+    let item = s
+        .publish(
+            "q",
+            None,
+            &json!({"pad": "x".repeat(200)}),
+            1,
+            Retention::default(),
+        )
+        .unwrap();
+    assert_eq!(ids(&pull(&mut s, "work", "z", 1)), vec![item], "leased");
+    s.publish(
+        "big",
+        None,
+        &json!({"pad": "x".repeat(570)}),
+        2,
+        Retention::default(),
+    )
+    .unwrap();
+    let due = pull_due(&mut s, "z", &PullOpts::at(20));
+    assert!(
+        due.contains("subscription=work subscriber=z delivered=0 more=1 "),
+        "work had no room: {due}"
+    );
+    assert_eq!(
+        ids(&pull(&mut s, "work", "z", 21)),
+        vec![item],
+        "the expired lease returns the item, under max attempts"
+    );
 }
 
 #[test]
@@ -190,7 +245,10 @@ fn a_full_scan_window_with_no_match_says_pull_again() {
         put(&mut s, "q", n, 1);
     }
     let out = pull(&mut s, "feed", "a", 2);
-    assert!(out.contains("more in feed: pull again"), "{out}");
+    assert!(
+        out.contains(" delivered=0 more=1 "),
+        "the agent learns to pull again: {out}"
+    );
 }
 
 #[test]
@@ -205,9 +263,13 @@ fn a_due_pull_stays_inside_its_byte_budget() {
     }
     put(&mut s, "q2", 1, 1);
     let mut opts = PullOpts::at(2);
-    opts.max_bytes = 200;
+    opts.max_bytes = tundish::store::MIN_BYTES;
     let out = pull_due(&mut s, "z", &opts);
-    assert!(out.len() <= 200, "{} bytes: {out}", out.len());
+    assert!(
+        out.len() <= tundish::store::MIN_BYTES,
+        "{} bytes: {out}",
+        out.len()
+    );
 }
 
 #[test]
@@ -296,8 +358,9 @@ fn the_unacked_count_follows_the_filter() {
         put(&mut s, "q", n, 1);
     }
     pull(&mut s, "feed", "a", 2);
-    let out = pull(&mut s, "feed", "a", 3);
-    assert!(out.contains("2 unacked in feed"), "{out}");
+    put(&mut s, "q", 4, 3);
+    let out = pull(&mut s, "feed", "a", 4);
+    assert!(out.contains(" unacked=2 "), "{out}");
 }
 
 #[test]
@@ -316,11 +379,11 @@ fn the_drop_count_follows_the_filter_and_is_reported_once() {
     s.publish("q", None, &json!({"n": 10, "even": true}), 100, aged)
         .unwrap();
     let out = pull(&mut s, "feed", "a", 101);
-    assert!(out.contains("2 unread items in feed were dropped"), "{out}");
+    assert!(out.contains(" dropped=2 "), "{out}");
     s.publish("q", None, &json!({"n": 12, "even": true}), 102, aged)
         .unwrap();
     let again = pull(&mut s, "feed", "a", 103);
-    assert!(!again.contains("dropped"), "reported twice: {again}");
+    assert!(again.contains(" dropped=0 "), "reported twice: {again}");
     let aged_one = Retention {
         max_items: None,
         max_age: Some(10),
@@ -329,19 +392,21 @@ fn the_drop_count_follows_the_filter_and_is_reported_once() {
     s.publish("q", None, &json!({"n": 22, "even": true}), 200, aged_one)
         .unwrap();
     let one = pull(&mut s, "feed", "a", 201);
-    assert!(one.contains("1 unread item in feed was dropped"), "{one}");
+    assert!(one.contains(" dropped=1 "), "{one}");
 }
 
 #[test]
 fn a_byte_budget_below_the_minimum_is_refused() {
+    use tundish::store::MIN_BYTES;
     let (_d, mut s) = store();
     s.subscribe("feed", "a", Some(Rules::new("q")), 0).unwrap();
     let mut opts = PullOpts::at(1);
-    opts.max_bytes = 127;
+    opts.max_bytes = MIN_BYTES - 1;
     assert!(s.pull("feed", "a", &opts, &mut Vec::new()).is_err());
     assert!(s.pull_due("a", &opts, &mut Vec::new()).is_err());
-    opts.max_bytes = 128;
+    opts.max_bytes = MIN_BYTES;
     assert!(s.pull("feed", "a", &opts, &mut Vec::new()).is_ok());
+    assert!(s.pull_due("a", &opts, &mut Vec::new()).is_ok());
 }
 
 #[test]

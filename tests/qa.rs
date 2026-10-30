@@ -158,7 +158,10 @@ fn an_ack_names_the_subscription_when_the_subscriber_has_two() {
         AckOutcome::Acked
     );
     let out = pull(&mut s, "one", "a", 3);
-    assert!(out.contains("--subscription one"), "{out}");
+    assert!(
+        out.starts_with("tundish: subscription=one subscriber=a "),
+        "{out}"
+    );
 }
 
 // M1
@@ -197,8 +200,19 @@ fn a_filter_error_skips_the_item_and_reports_it() {
     s.pull_due("a", &PullOpts::at(2), &mut out).unwrap();
     let out = String::from_utf8(out).unwrap();
     assert_eq!(ids(&out), vec![ok, g], "{out}");
-    assert!(out.contains("1 item in bad failed the filter"), "{out}");
-    assert!(!out.contains("Str(["), "readable error: {out}");
+    assert!(
+        out.contains(
+            "tundish: subscription=bad subscriber=a delivered=1 more=0 unacked=0 parked=0 errors=1 "
+        ),
+        "{out}"
+    );
+    let st = s.status(2).unwrap();
+    let bad = st.iter().find(|r| r.subscription == "bad").unwrap();
+    let text = bad.last_error.as_deref().unwrap_or_default();
+    assert!(
+        !text.is_empty() && !text.contains("Str(["),
+        "readable error: {text}"
+    );
     assert_eq!(
         pull(&mut s, "bad", "a", 3),
         "",
@@ -268,16 +282,16 @@ fn share_one_retention_trims_delivered_items_and_reports_no_false_drops() {
     s.publish("q", None, &json!({"n": 100}), 100, aged).unwrap();
     let out = pull(&mut s, "w", "a", 101);
     assert!(
-        !out.contains("dropped"),
+        out.contains(" dropped=0 "),
         "every dropped item was delivered: {out}"
     );
-    let st = s.status().unwrap();
+    let st = s.status(101).unwrap();
     assert_eq!(st[0].unread, 0, "{st:?}");
 }
 
 // M5
 #[test]
-fn footers_count_against_the_byte_budget() {
+fn status_lines_count_against_the_byte_budget() {
     let (_d, mut s) = store();
     s.subscribe(
         "s1",
@@ -324,7 +338,7 @@ fn a_full_batch_says_more_remain() {
     for i in 0..5 {
         put(&mut s, "q", json!({"n": i}), 1);
     }
-    assert!(pull(&mut s, "f", "a", 2).contains("more in f"));
+    assert!(pull(&mut s, "f", "a", 2).contains(" delivered=2 more=1 "));
 }
 
 // minors
@@ -356,6 +370,6 @@ fn opening_an_existing_store_takes_no_write_lock() {
     let holder = rusqlite::Connection::open(&path).unwrap();
     holder.execute_batch("BEGIN IMMEDIATE").unwrap();
     let s = Store::open_with(&path, std::time::Duration::from_millis(50)).unwrap();
-    assert!(s.status().is_ok());
+    assert!(s.status(0).is_ok());
     holder.execute_batch("ROLLBACK").unwrap();
 }
