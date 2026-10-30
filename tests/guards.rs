@@ -67,6 +67,72 @@ fn a_share_one_subscription_moved_to_a_queue_with_lower_ids_reads_it_all() {
 }
 
 #[test]
+fn a_move_resets_acks_leases_and_pending_drops() {
+    let (_d, mut s) = store();
+    let a = put(&mut s, "a", 1, 1);
+    put(&mut s, "b", 2, 1);
+    let mut one = on_ack("a");
+    one.share = Share::One;
+    s.subscribe("work", "w", Some(one.clone()), 2).unwrap();
+    assert_eq!(ids(&pull(&mut s, "work", "w", 3)), vec![a], "leased");
+    let mut read = Rules::new("a");
+    read.share = Share::One;
+    s.subscribe("other", "w", Some(read.clone()), 2).unwrap();
+    assert_eq!(
+        ids(&pull(&mut s, "other", "w", 3)),
+        vec![a],
+        "acked on read"
+    );
+    for sub in ["work", "other"] {
+        let mut moved = if sub == "work" {
+            one.clone()
+        } else {
+            read.clone()
+        };
+        moved.queue = "b".into();
+        s.subscribe(sub, "w", Some(moved.clone()), 4).unwrap();
+        moved.queue = "a".into();
+        s.subscribe(sub, "w", Some(moved), 5).unwrap();
+        assert_eq!(ids(&pull(&mut s, sub, "w", 6)), vec![a], "{sub} reset");
+    }
+
+    let mut feed = Rules::new("a");
+    feed.start = tundish::rules::Start::All;
+    s.subscribe("feed", "f", Some(feed.clone()), 7).unwrap();
+    let aged = Retention {
+        max_items: None,
+        max_age: Some(10),
+    };
+    s.publish("a", None, &json!({"n": 9}), 100, aged).unwrap();
+    feed.queue = "b".into();
+    s.subscribe("feed", "f", Some(feed), 101).unwrap();
+    let out = pull(&mut s, "feed", "f", 102);
+    assert!(!out.contains("dropped"), "a drop from the old queue: {out}");
+}
+
+#[test]
+fn acked_items_are_not_counted_as_drops() {
+    let (_d, mut s) = store();
+    let mut r = on_ack("q");
+    r.share = Share::One;
+    r.limit = Some(1);
+    s.subscribe("work", "a", Some(r), 0).unwrap();
+    s.subscribe("work", "b", None, 0).unwrap();
+    put(&mut s, "q", 1, 1);
+    put(&mut s, "q", 2, 1);
+    pull(&mut s, "work", "a", 2);
+    let second = ids(&pull(&mut s, "work", "b", 2));
+    s.ack(second[0], "b", 3).unwrap();
+    let aged = Retention {
+        max_items: None,
+        max_age: Some(10),
+    };
+    s.publish("q", None, &json!({"n": 3}), 100, aged).unwrap();
+    let out = pull(&mut s, "work", "a", 101);
+    assert!(out.contains("1 unread item in work was dropped"), "{out}");
+}
+
+#[test]
 fn a_parked_item_does_not_hold_retention() {
     let (_d, mut s) = store();
     let mut r = on_ack("q");

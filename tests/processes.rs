@@ -179,11 +179,17 @@ fn a_pull_blocked_past_the_gaff_deadline_fails_and_delivers_nothing() {
 
     let holder = rusqlite::Connection::open(&db).unwrap();
     holder.execute_batch("BEGIN IMMEDIATE").unwrap();
+    let started = std::time::Instant::now();
     let blocked = tundish(&db, &["pull", "feed", "--as", "a"])
         .env("GAFF_TIMEOUT_MS", "300")
         .output()
         .unwrap();
+    let waited = started.elapsed();
     holder.execute_batch("ROLLBACK").unwrap();
+    assert!(
+        waited < std::time::Duration::from_secs(2),
+        "the pull waited {waited:?}, past the 300 ms deadline"
+    );
     assert_eq!(
         blocked.status.code(),
         Some(1),
