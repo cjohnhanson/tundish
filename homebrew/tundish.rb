@@ -32,7 +32,7 @@ class Tundish < Formula
 
   def install
     bin.install "tundish"
-    man1.install "man/tundish.1" if File.exist?("man/tundish.1")
+    man1.install Dir["man/*.1"]
   end
 
   test do
