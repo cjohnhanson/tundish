@@ -6,6 +6,8 @@ pub mod config;
 pub mod error;
 pub mod expr;
 mod mangen;
+#[cfg(feature = "python")]
+mod python;
 pub mod rules;
 pub mod store;
 

@@ -2,6 +2,25 @@
 name = "tundish"
 version = "0.1.0"
 edition = "2024"
+# 1.88: the code uses let-chains.
+rust-version = "1.88"
+description = "A local inbox that agents subscribe to"
+license = "MIT"
+repository = "https://github.com/cjohnhanson/tundish"
+homepage = "https://github.com/cjohnhanson/tundish"
+readme = "README.md"
+authors = ["Cody Hanson"]
+keywords = ["queue", "inbox", "agents", "sqlite", "cli"]
+categories = ["command-line-utilities", "development-tools"]
+exclude = ["npm/", "python/", "pyproject.toml", "tests/", ".github/", ".gaff/", ".tisket/"]
+
+[lib]
+# rlib for the binary and the tests; cdylib for the Python module.
+crate-type = ["rlib", "cdylib"]
+
+[[bin]]
+name = "tundish"
+path = "src/main.rs"
 
 [dependencies]
 clap = { version = "4.6.7", features = ["derive"] }
@@ -12,9 +31,10 @@ jaq-core = "3.1"
 jaq-json = "2.0"
 jaq-std = "3.0"
 mdstore = { version = "0.5", package = "mdstore-core" }
+pyo3 = { version = "0.30", optional = true }
 rusqlite = { version = "0.40", features = ["bundled"] }
 serde = { version = "1.0.229", features = ["derive"] }
-serde_json = "1.0.154"
+serde_json = { version = "1.0.154", features = ["preserve_order"] }
 thiserror = "2"
 yaml_serde = "0.10"
 
@@ -24,3 +44,7 @@ tempfile = "3.27.0"
 
 [build-dependencies]
 diataxis = { version = "0.1", default-features = false, features = ["build"] }
+
+[features]
+# The Python module, built by maturin. Off for the crate and the binary.
+python = ["dep:pyo3"]
