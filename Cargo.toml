@@ -48,3 +48,15 @@ diataxis = { version = "0.1", default-features = false, features = ["build"] }
 [features]
 # The Python module, built by maturin. Off for the crate and the binary.
 python = ["dep:pyo3"]
+
+[package.metadata.deb]
+maintainer = "cjohnhanson <cody@codyjhanson.com>"
+section = "utils"
+priority = "optional"
+depends = "$auto"
+extended-description = "A local inbox that agents subscribe to"
+assets = [
+    ["target/release/tundish", "usr/bin/", "755"],
+    ["README.md", "usr/share/doc/tundish/README", "644"],
+    ["LICENSE", "usr/share/doc/tundish/LICENSE", "644"],
+]
