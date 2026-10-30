@@ -440,9 +440,9 @@ impl Store {
 
     /// Pull every due subscription of `subscriber` in one transaction,
     /// sharing one byte budget: all of it is marked delivered, or none.
-    /// The budget holds one status line per subscription pulled; the
-    /// subscriptions that do not fit wait for the next pull, first in
-    /// line since they did not deliver.
+    /// Each subscription, in due order, uses the budget the ones before
+    /// it left; one without room for a status line and an item slice
+    /// waits for the next pull, first in line since it did not deliver.
     pub fn pull_due(
         &mut self,
         subscriber: &str,
@@ -839,14 +839,13 @@ fn pull_in(
             if is_acked(tx, name, row.id)? {
                 continue;
             }
-            if let Some((_, until, attempts)) = lease_of(tx, name, row.id)? {
-                if until > opts.now {
-                    continue;
-                }
-                if attempts >= rules.max_attempts {
-                    parked.push(row.id);
-                    continue;
-                }
+            let lease = lease_of(tx, name, row.id)?;
+            if is_parked(lease.as_ref(), &rules, opts.now) {
+                parked.push(row.id);
+                continue;
+            }
+            if lease.is_some_and(|(_, until, _)| until > opts.now) {
+                continue;
             }
         }
         candidates.push(row);
@@ -1100,6 +1099,13 @@ fn lease_of(tx: &Connection, sub: &str, id: i64) -> Result<Option<(String, i64, 
 
 /// The share: one low-water mark moves past leading rows that are done:
 /// filtered out, acked, or parked. A live lease holds it.
+/// The one parked test: an expired lease that used its last attempt.
+/// It holds whatever the subscription's consume mode is now, so a rule
+/// change cannot leave an item that is neither delivered nor passed.
+fn is_parked(lease: Option<&(String, i64, i64)>, rules: &Rules, now: i64) -> bool {
+    lease.is_some_and(|(_, until, attempts)| *until <= now && *attempts >= rules.max_attempts)
+}
+
 fn advance_lwm(
     tx: &Connection,
     sub: &str,
@@ -1111,9 +1117,7 @@ fn advance_lwm(
 ) -> Result<i64> {
     let mut lwm = from;
     for (row, ok) in rows.iter().zip(matched) {
-        let parked = rules.consume == Consume::OnAck
-            && matches!(lease_of(tx, sub, row.id)?,
-                Some((_, until, a)) if a >= rules.max_attempts && until <= now);
+        let parked = is_parked(lease_of(tx, sub, row.id)?.as_ref(), rules, now);
         if !ok || is_acked(tx, sub, row.id)? || parked {
             lwm = row.id;
         } else {

@@ -482,11 +482,12 @@ fn the_cli_refuses_a_missing_item_an_absent_binding_and_bad_stored_rules() {
             .success()
     );
     assert_eq!(cli(d, &["ack", "7", "--as", "a"]).status.code(), Some(2));
-    assert_eq!(
-        cli(d, &["unsubscribe", "feed", "--as", "zed"])
-            .status
-            .code(),
-        Some(2)
+    let absent = cli(d, &["unsubscribe", "feed", "--as", "zed"]);
+    assert_eq!(absent.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&absent.stderr).contains("zed is not bound to feed"),
+        "{}",
+        String::from_utf8_lossy(&absent.stderr)
     );
     assert!(cli(d, &["subscribe", "feed", "--as", "b"]).status.success());
     let gone = cli(d, &["unsubscribe", "feed", "--as", "b"]);

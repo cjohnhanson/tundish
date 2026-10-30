@@ -149,7 +149,7 @@ struct PullArgs {
     due: bool,
     #[arg(long = "as")]
     subscriber: String,
-    /// The byte budget for the printed batch
+    /// The byte budget for the printed batch, at least 400
     #[arg(long, default_value_t = 1024)]
     max_bytes: usize,
 }
@@ -328,10 +328,9 @@ fn dispatch(args: Args) -> Result<i32> {
         }
         Command::Unsubscribe { name, subscriber } => {
             if !store.unsubscribe(&name, &subscriber)? {
-                return Err(Error::NotSubscribed {
-                    subscription: name,
-                    subscriber,
-                });
+                return Err(Error::Usage(format!(
+                    "{subscriber} is not bound to {name}; tundish status lists the bindings"
+                )));
             }
             writeln!(
                 stdout,

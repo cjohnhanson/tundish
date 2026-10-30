@@ -500,6 +500,26 @@ fn idle_due_subscriptions_do_not_starve_one_with_items() {
 }
 
 #[test]
+fn a_switch_to_on_read_does_not_pin_a_parked_item() {
+    let (_d, mut s) = store();
+    let mut r = Rules::new("q");
+    r.share = Share::One;
+    r.consume = Consume::OnAck;
+    r.max_attempts = 1;
+    r.lease = 10;
+    s.subscribe("w", "a", Some(r.clone()), 100).unwrap();
+    publish(&mut s, "q", 1, 100);
+    pull(&mut s, "w", "a", 100);
+    r.consume = Consume::OnRead;
+    s.subscribe("w", "a", Some(r), 105).unwrap();
+    let later = publish(&mut s, "q", 1, 106);
+    assert_eq!(ids(&pull(&mut s, "w", "a", 200)), later);
+    pull(&mut s, "w", "a", 201);
+    let st = s.status(202).unwrap();
+    assert_eq!(st[0].unread, 0, "the parked item pins the position: {st:?}");
+}
+
+#[test]
 fn pull_due_commits_every_subscription_or_none() {
     let (_d, mut s) = store();
     s.subscribe("one", "a", Some(Rules::new("q1")), 0).unwrap();
