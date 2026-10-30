@@ -80,6 +80,72 @@ fn on_ack(q: &str) -> Rules {
     r
 }
 
+fn work_queue(q: &str) -> Rules {
+    let mut r = on_ack(q);
+    r.share = Share::One;
+    r
+}
+
+// 0. The share one scan position.
+
+#[test]
+fn a_share_one_match_behind_a_full_window_of_rejected_rows_is_reached() {
+    let (_d, mut s) = store();
+    let mut r = work_queue("q");
+    r.filter = Some(".payload.even".into());
+    s.subscribe("work", "w", Some(r), 0).unwrap();
+    for _ in 0..1000 {
+        put(&mut s, "q", json!({"even": false}), 1);
+    }
+    let even = put(&mut s, "q", json!({"even": true}), 1);
+    let mut got = Vec::new();
+    for now in 2..6 {
+        got.extend(ids(&pull(&mut s, "work", "w", now)));
+    }
+    assert_eq!(got, vec![even]);
+}
+
+#[test]
+fn a_stop_inside_retries_keeps_the_scan_position() {
+    let (_d, mut s) = store();
+    let mut r = work_queue("q");
+    r.filter = Some(".payload.even".into());
+    r.limit = Some(1);
+    r.lease = 10;
+    s.subscribe("work", "w", Some(r.clone()), 0).unwrap();
+    let a = put(&mut s, "q", json!({"even": true}), 1);
+    put(&mut s, "q", json!({"even": false}), 1);
+    let c = put(&mut s, "q", json!({"even": true}), 1);
+    assert_eq!(ids(&pull(&mut s, "work", "w", 2)), vec![a]);
+    assert_eq!(ids(&pull(&mut s, "work", "w", 3)), vec![c]);
+    r.filter = Some(".payload.even | not".into());
+    s.subscribe("work", "w", Some(r), 4).unwrap();
+    assert_eq!(ids(&pull(&mut s, "work", "w", 30)), vec![a], "a retry");
+    s.ack(c, "w", 30).unwrap();
+    s.ack(a, "w", 30).unwrap();
+    let after = pull(&mut s, "work", "w", 31);
+    assert!(
+        ids(&after).is_empty(),
+        "an item behind the position came back: {after}"
+    );
+}
+
+#[test]
+fn more_is_set_when_retries_fill_their_bound() {
+    let (_d, mut s) = store();
+    let mut r = work_queue("q");
+    r.lease = 10;
+    s.subscribe("work", "w", Some(r), 0).unwrap();
+    for n in 0..1001 {
+        put(&mut s, "q", json!({"n": n}), 1);
+    }
+    let big = budget(2, 1_000_000);
+    pull_at(&mut s, "work", "w", &big);
+    pull_at(&mut s, "work", "w", &budget(3, 1_000_000));
+    let retry = pull_at(&mut s, "work", "w", &budget(30, 1_000_000));
+    assert_eq!(count(&retry, "work", "more"), 1, "1001 retries waiting");
+}
+
 // 1. The status line.
 
 #[test]
