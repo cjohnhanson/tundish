@@ -30,13 +30,22 @@ rules. The publisher does not need to know about either subscription.
 A subscriber is a stable name, often an agent role such as `reviewer`.
 It binds to a subscription. Its position records progress across pulls and
 across sessions. With the default rules, each subscriber has its own
-position. With `share one`, subscribers use a shared position so that
-successive pulls can divide the items among them.
+position. With `share one`, the subscription has one forward position
+for all its subscribers. Pulls move it past each new item evaluated,
+including items filtered out or skipped after a filter error. A held
+lease does not keep other subscribers from receiving new work.
 
-A new subscriber starts with every item still kept. The `start new` rule
-starts it after the existing items. The `latest` selection rule serves
+With `share all`, a new subscriber starts with every item still kept.
+The `start new` rule starts it after the existing items. With `share one`,
+this rule sets the subscription's initial position. Later subscribers
+join at that position's current value. The `latest` selection rule serves
 another purpose: it delivers a recent selection and skips older unseen
 items. It suits a status digest where an old item is no longer useful.
+
+Changing a filter keeps the position and existing claims. Items behind
+the position do not return if they start matching the new filter. A
+change to `share all` carries the position and clears leases. A change
+to `share one` starts from the lowest subscriber position.
 
 ## Delivery and responsibility
 
@@ -54,10 +63,14 @@ of acting on it too. A repeat ack by the owner succeeds.
 
 With `one` and `on-ack`, the pull itself grants a temporary lease. Every
 subscriber, including the holder, skips the item while the lease holds.
-If the holder stops without acking, the expired lease lets another pull
-receive the item. After the maximum number of leases expires, tundish
-parks the item. This limits repeated delivery of an item
-that no subscriber finishes.
+If the holder stops without acking, the next pull retries the item
+ahead of new work, within the item limit. The filter does not run again
+on a retry. The item matched when first leased.
+
+When the last allowed lease expires without an ack, tundish parks the
+item and reports it once in a pull. This limits repeated delivery of
+work that no subscriber finishes. A parked item is never retried, even
+if the maximum number of attempts is raised later.
 
 Each subscription owns its acks and leases. An ack in a `triage`
 subscription does not take an item away from a separate `audit`
@@ -85,18 +98,10 @@ read the same config and reach the same database. The
 
 ## Pulls and hook events
 
-A pull stops at the subscription's `--limit`, when set, or its byte
-budget. `--max-bytes` defaults to 1024 bytes and has a minimum of 400;
-there is no default item limit. Each subscription's output starts with a
-status line, followed by its items. The first matching item is delivered
-even if it must be cut to fit, ending with `… tundish show <id>`.
-Output, including status lines, never exceeds the budget. The
-[CLI reference](cli-reference.md#pull) gives the output rules and limits.
-
-A hook can call `pull --due` after every tool batch. The subscription's
-interval controls how often it delivers items. A pull that prints no
-item does not spend that interval. The interval is not a timer that wakes
-the agent: an idle session receives nothing until another hook event.
+A hook can call `pull --due` after every tool batch. See
+[Due pulls](cli-reference.md#due-pulls) for delivery intervals and budget
+rules. The hook supplies the occasion to deliver. An idle session
+receives nothing until another hook event.
 
 ## At-least-once delivery
 
@@ -122,10 +127,17 @@ count. Once read positions permit it, a later publish removes the excess.
 An unacked item already shown under `share all` has passed the read
 position and can be removed by the count limit.
 
+With `share one`, the count limit protects both the subscription's
+position and its lowest open lease. Items from that lease onward stay
+available while the work is unacked and not parked. A parked item no
+longer holds retention. A subscription must have a bound subscriber to
+hold retention through its position or leases.
+
 An age limit makes a different choice. It removes old items even when
 a subscriber has not read them. tundish records the number of unread
-matching items lost. A named pull or a due pull reports that count once
-as `dropped=` in the status line, even without delivering an item from
+matching items lost. For `share one`, this includes items removed while
+under an open lease. A pull reports that count once as `dropped=` in the
+status line, even without delivering an item from
 the subscription. That count distinguishes an empty queue from missing
 history.
 

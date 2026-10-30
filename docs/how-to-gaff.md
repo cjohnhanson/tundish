@@ -74,21 +74,9 @@ To set the database path, use `database:` in
 run from any working directory. Without that setting, the database is
 `~/.local/state/tundish/tundish.db`.
 
-The handler's `every` counts tool calls. The subscription's `--every`
-counts time since the last pull that printed an item. With `--every 5m`,
-`pull --due` delivers this subscription's items at most once every five
-minutes. Each subscription that prints anything starts with a status
-line. Its `unacked=` count covers earlier deliveries only when the pull
-delivers an item. The `parked=`, `errors=`, and `dropped=` counts report
-events once, even without an item.
-An empty pull does not start a window. An idle session waits
-for its next hook event, even after five minutes pass.
-
-A bound subscriber with nothing due and nothing to report gets no output
-and exit 0. If the subscriber holds no subscription, `pull --due` exits 2
-and prints
-`tundish: <who> holds no subscription, so nothing can be due: tundish subscribe <name> --as <who>`.
-A typo in the handler's `--as` value can cause this exit.
+The handler's `every` counts tool calls. For the subscription's delivery
+interval and output rules, see [Due pulls](cli-reference.md#due-pulls).
+An idle session waits for its next hook event.
 
 ## Allow the handler in the working directory
 
@@ -112,10 +100,8 @@ tundish publish slack --key slack:C123 '{"text":"Review PR 42"}'
 ```
 
 Ask the agent to run a command, such as `pwd`. At the next tool batch,
-gaff injects the due batch. If the subscription has delivered in the last
-five minutes, wait for the window to pass and trigger another tool batch.
-
-To inspect the subscription's position and next delivery time:
+gaff runs the handler. If no batch arrives, check the subscription's
+position and next delivery time:
 
 ```sh
 tundish status
@@ -127,19 +113,14 @@ For a manual pull that ignores the interval:
 tundish pull inbox --as reviewer
 ```
 
-A manual pull marks its output delivered. If it prints an item, it also
-starts a new five-minute window. The handler will not print that item
-again under this subscription's `share all` rules.
+A manual pull marks its output delivered. The handler will not print
+that item again under this subscription's `share all` rules.
 
 ## Keep the batch within the handler's budget
 
 The example uses tundish's default 1024-byte pull budget and the same
-`max_bytes` in gaff. If you change one, change the other. tundish includes
-each status line in its budget and never exceeds it. The minimum is
-400 bytes. A due pull visits subscriptions least recently delivered first.
-Each uses the budget left by those before it. One busy subscription can
-fill the pull. Another due subscription may report only in a later pull.
-See the [pull reference](cli-reference.md#pull) for truncation rules.
+`max_bytes` in gaff. If you change one, change the other. See
+[Due pulls](cli-reference.md#due-pulls) for budget allocation and truncation.
 
 gaff passes `GAFF_TIMEOUT_MS` to the command. If the deadline passes
 before the commit, tundish rolls back and exits 1. gaff discards that

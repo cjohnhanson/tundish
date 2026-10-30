@@ -63,12 +63,21 @@ live lease. The output names that subscriber. Leave the item to them.
 Do not change `--as` to their name or retry to take their claim.
 
 With `share one` and `on-ack`, a live lease hides the item from later
-pulls, including the holder's. An expired lease can deliver the item
-again. After the maximum attempts, tundish parks the item. The status
-line reports newly parked items as `parked=`, filter failures as
+pulls, including the holder's. Other subscribers can still pull new
+work. The subscription's position moves past new items evaluated,
+including items filtered out or skipped after a filter error.
+
+An expired lease returns the item ahead of new work, within `--limit`.
+A retry does not run the filter again. When the last allowed lease
+expires without an ack, tundish parks the item. Parked items are never
+retried, even after raising `--max-attempts`.
+
+The status line reports newly parked items as `parked=`, filter failures as
 `errors=`, and unread items lost to retention as `dropped=`. Each count
-is reported once. `unacked=` counts earlier unacked items only when the
-pull delivers items. A subscription with nothing to report prints nothing.
+is reported once. For `share one`, `dropped=` also includes items trimmed
+under an open lease. Under `share all`, `unacked=` counts earlier unacked
+items only when the pull delivers items. A subscription with nothing to
+report prints nothing.
 
 To inspect unacked items, use the queue from `[queue#id]` and the
 subscription from the status line:
@@ -102,8 +111,10 @@ With `--queue`, the command also replaces an existing subscription's
 rules. It prints `created inbox`, `replaced the rules of inbox`, or
 `moved inbox from <old queue>; its positions, acks, and leases were reset`,
 then any new binding and the stored rules. Include every rule to keep.
-The default `--start all` includes
-retained items; `--start new` includes only items published after a new
-subscriber joins. `tundish status` shows bindings and positions.
+The default `--start all` includes retained items. `--start new` starts
+after existing items. Under `share all`, this rule applies when a new
+subscriber joins. Under `share one`, it sets the subscription's initial
+position. Later subscribers use the subscription's current position.
+`tundish status` shows bindings and positions.
 
 For rule flags and defaults, read `tundish docs cli-reference`.
