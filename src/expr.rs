@@ -6,6 +6,10 @@ use jaq_json::Val;
 
 use crate::error::{Error, Result};
 
+/// jaq-std filters a subscription expression may not call, natives and
+/// the definitions built on them.
+const DENIED: &[&str] = &["env", "halt", "halt_error", "input", "inputs"];
+
 /// A compiled jaq program.
 pub struct Expr {
     filter: jaq_core::Filter<data::JustLut<Val>>,
@@ -14,11 +18,13 @@ pub struct Expr {
 impl Expr {
     /// Compile `code`. A syntax or name error names the expression.
     pub fn compile(code: &str) -> Result<Self> {
+        // An expression sees only its item: no environment, no stdin,
+        // and no way to end the process mid-pull.
         let defs = jaq_core::defs()
-            .chain(jaq_std::defs())
+            .chain(jaq_std::defs().filter(|d| !DENIED.contains(&d.name)))
             .chain(jaq_json::defs());
         let funs = jaq_core::funs()
-            .chain(jaq_std::funs())
+            .chain(jaq_std::funs().filter(|f| !DENIED.contains(&f.0)))
             .chain(jaq_json::funs());
         let arena = Arena::default();
         let modules = Loader::new(defs)

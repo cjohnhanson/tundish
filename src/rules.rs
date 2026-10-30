@@ -190,4 +190,16 @@ mod tests {
         r.filter = Some(".a ==".into());
         assert!(r.check().is_err());
     }
+
+    #[test]
+    fn expressions_cannot_read_the_environment_or_exit() {
+        for code in ["env", "$ENV", "halt", "halt_error", "input", "inputs"] {
+            let mut r = Rules::new("q");
+            r.template = Some(code.into());
+            assert!(r.check().is_err(), "{code} compiled");
+        }
+        let mut r = Rules::new("q");
+        r.template = Some(".payload | tojson | ascii_downcase".into());
+        assert!(r.check().is_ok(), "ordinary functions still compile");
+    }
 }
