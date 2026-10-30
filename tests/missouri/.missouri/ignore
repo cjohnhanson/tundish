@@ -1,0 +1,7 @@
+# Patterns to exclude from state comparison (gitignore syntax)
+#
+# The SQLite file is binary and changes on every write, so no fixture
+# carries it. A path carries it from one transition to the next, and
+# each transition checks the inbox through the command's own stdout.
+tundish.db
+tundish.db-*

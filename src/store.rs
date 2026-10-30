@@ -165,7 +165,11 @@ impl Row {
 
     /// The default rendering, which never fails.
     fn plain(&self) -> String {
-        let key = self.key.as_deref().map(|k| format!(" {k}")).unwrap_or_default();
+        let key = self
+            .key
+            .as_deref()
+            .map(|k| format!(" {k}"))
+            .unwrap_or_default();
         format!("[{}#{}]{key} {}", self.queue, self.id, self.payload)
     }
 }
@@ -279,10 +283,7 @@ impl Store {
             )?;
             if old.is_some_and(|q| q != r.queue) {
                 let start = start_position(&tx, r)?;
-                tx.execute(
-                    "UPDATE subscriptions SET lwm = 0 WHERE name = ?1",
-                    [name],
-                )?;
+                tx.execute("UPDATE subscriptions SET lwm = 0 WHERE name = ?1", [name])?;
                 tx.execute("DELETE FROM acks WHERE subscription = ?1", [name])?;
                 tx.execute("DELETE FROM leases WHERE subscription = ?1", [name])?;
                 tx.execute(
@@ -513,11 +514,11 @@ impl Store {
 
     /// Items in one queue.
     pub fn count(&self, queue: &str) -> Result<i64> {
-        Ok(self
-            .conn
-            .query_row("SELECT count(*) FROM items WHERE queue = ?1", [queue], |r| {
-                r.get(0)
-            })?)
+        Ok(self.conn.query_row(
+            "SELECT count(*) FROM items WHERE queue = ?1",
+            [queue],
+            |r| r.get(0),
+        )?)
     }
 
     /// Every subscription and its rules.
@@ -632,7 +633,11 @@ fn footer(
         f.push_str(&format!(
             "{} {} in {name} failed the filter: {}\n",
             notes.filter_errors,
-            if notes.filter_errors == 1 { "item" } else { "items" },
+            if notes.filter_errors == 1 {
+                "item"
+            } else {
+                "items"
+            },
             notes.first_error.as_deref().unwrap_or("")
         ));
     }
@@ -688,7 +693,11 @@ fn pull_in(
     let latest = rules.select == Select::Latest;
     let rows = scan(tx, &rules.queue, from, latest)?;
     let window_full = rows.len() as i64 == SCAN;
-    let head = if latest { rows.first().map(|r| r.id) } else { None };
+    let head = if latest {
+        rows.first().map(|r| r.id)
+    } else {
+        None
+    };
 
     let mut notes = Notes {
         dropped,
@@ -1073,7 +1082,11 @@ fn count_drops(tx: &Connection, queue: &str, cutoff: i64) -> Result<()> {
     drop(st);
     for (name, rules, lwm, subscriber, cursor) in subs {
         let rules: Rules = serde_json::from_str(&rules)?;
-        let pos = if rules.share == Share::One { lwm } else { cursor };
+        let pos = if rules.share == Share::One {
+            lwm
+        } else {
+            cursor
+        };
         if pos >= cutoff {
             continue;
         }

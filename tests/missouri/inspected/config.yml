@@ -1,0 +1,4 @@
+format: 1
+queues:
+  slack:
+    max_items: 100

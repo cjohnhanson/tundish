@@ -13,7 +13,9 @@ pub enum Error {
     Usage(String),
     #[error("no subscription named {0}")]
     NoSubscription(String),
-    #[error("{subscriber} is not subscribed to {subscription}; run `tundish subscribe {subscription} --as {subscriber}`")]
+    #[error(
+        "{subscriber} is not subscribed to {subscription}; run `tundish subscribe {subscription} --as {subscriber}`"
+    )]
     NotSubscribed {
         subscription: String,
         subscriber: String,

@@ -1,0 +1,12 @@
+doc: |
+  One subscription, inbox, on queue slack. Both publish forms lead to
+  the same state, so every path below runs once for each.
+transitions:
+  - name: "publish an item given as an argument"
+    command: "tundish --now 1001 publish slack --key C1 '{\"text\":\"hi\"}'"
+    target: "../published"
+    stdout: "1\n"
+  - name: "publish an item read from stdin"
+    command: "printf '{\"text\":\"hi\"}' | tundish --now 1001 publish slack --key C1"
+    target: "../published"
+    stdout: "1\n"

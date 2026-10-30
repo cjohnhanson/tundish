@@ -1,7 +1,7 @@
 //! jaq filters and templates, compiled once per pull.
 
 use jaq_core::load::{Arena, File, Loader};
-use jaq_core::{data, unwrap_valr, Compiler, Ctx, Vars};
+use jaq_core::{Compiler, Ctx, Vars, data, unwrap_valr};
 use jaq_json::Val;
 
 use crate::error::{Error, Result};

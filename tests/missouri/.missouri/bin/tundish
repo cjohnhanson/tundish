@@ -1,0 +1,6 @@
+#!/bin/sh
+# The wrapper pins --db and --config to files in the state directory,
+# so no command reads or writes ~/.config/tundish or
+# ~/.local/state/tundish. It execs a copied binary, made by the setup,
+# so a mid-run write to target/ cannot become a self-exec.
+exec "$(dirname "$0")/tundish-bin" --db tundish.db --config config.yml "$@"
