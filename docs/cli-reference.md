@@ -110,8 +110,11 @@ Durations are positive integers with an optional unit: `90`, `30s`,
 unseen matching items and prints them oldest first. It moves the cursor
 to the newest scanned item and skips older unseen items. Each pull scans
 at most 1000 items per subscription. For `latest`, this is the newest
-1000 unseen items. If the byte budget stops a `latest` batch, the cursor
-still moves to the newest scanned item; omitted items do not return.
+1000 unseen items. If the byte budget stops a `latest` batch, the pull
+keeps the newest selected items that fit and drops older ones. It still
+prints them oldest first and moves the cursor to the newest scanned item.
+No `more in <name>: pull again` line prints because the dropped items do
+not return.
 
 Filter and template expressions compile when the subscription is created
 or replaced. At pull time, a filter error skips the item and adds a
