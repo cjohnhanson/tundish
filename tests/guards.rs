@@ -191,7 +191,7 @@ fn a_share_all_subscription_moved_to_a_queue_with_lower_ids_reads_it_all() {
 }
 
 #[test]
-fn an_expired_lease_under_max_attempts_holds_the_lwm_when_nothing_is_delivered() {
+fn an_expired_lease_under_max_attempts_is_retried_after_a_pull_with_no_room() {
     let (_d, mut s) = store();
     // `big` fills a due pull, so `work` delivers nothing in it.
     s.subscribe("big", "z", Some(Rules::new("big")), 0).unwrap();
@@ -230,9 +230,293 @@ fn an_expired_lease_under_max_attempts_holds_the_lwm_when_nothing_is_delivered()
     );
 }
 
+// share one selection: new rows by a forward scan, retries by the
+// lease table.
+
+fn one(q: &str) -> Rules {
+    let mut r = on_ack(q);
+    r.share = Share::One;
+    r
+}
+
+/// One count from the status line of `text`, or 0 when nothing printed.
+fn status_count(text: &str, key: &str) -> i64 {
+    text.lines()
+        .find(|l| l.starts_with("tundish: "))
+        .and_then(|l| {
+            l.split(' ')
+                .filter_map(|kv| kv.split_once('='))
+                .find(|(k, _)| *k == key)
+                .map(|(_, v)| v.parse().unwrap())
+        })
+        .unwrap_or(0)
+}
+
+#[test]
+fn a_held_lease_does_not_hide_free_items_past_the_scan_window() {
+    let (_d, mut s) = store();
+    let mut r = one("q");
+    r.lease = 100_000;
+    r.limit = Some(1);
+    s.subscribe("work", "a", Some(r), 0).unwrap();
+    s.subscribe("work", "b", None, 0).unwrap();
+    let all: Vec<i64> = (0..1005).map(|n| put(&mut s, "q", n, 1)).collect();
+    assert_eq!(
+        ids(&pull(&mut s, "work", "a", 2)),
+        vec![all[0]],
+        "a holds it"
+    );
+    for id in &all[1..1000] {
+        assert_eq!(s.ack(*id, "b", 3).unwrap(), AckOutcome::Acked);
+    }
+    let mut got = Vec::new();
+    for now in 4..20 {
+        let out = pull(&mut s, "work", "b", now);
+        if out.is_empty() {
+            break;
+        }
+        got.extend(ids(&out));
+    }
+    assert_eq!(got, all[1000..].to_vec(), "the free items after 1000");
+}
+
+#[test]
+fn a_parked_item_is_reported_once_and_a_higher_max_attempts_does_not_revive_it() {
+    let (_d, mut s) = store();
+    let mut r = one("q");
+    r.lease = 10;
+    r.max_attempts = 1;
+    s.subscribe("work", "a", Some(r.clone()), 0).unwrap();
+    let item = put(&mut s, "q", 1, 1);
+    assert_eq!(ids(&pull(&mut s, "work", "a", 2)), vec![item]);
+    let parked = pull(&mut s, "work", "a", 20);
+    assert_eq!(status_count(&parked, "parked"), 1, "{parked}");
+    assert_eq!(pull(&mut s, "work", "a", 21), "", "reported once");
+    r.max_attempts = 5;
+    s.subscribe("work", "a", Some(r), 22).unwrap();
+    assert_eq!(pull(&mut s, "work", "a", 30), "", "parked stays parked");
+    let next = put(&mut s, "q", 2, 31);
+    let out = pull(&mut s, "work", "a", 32);
+    assert_eq!(ids(&out), vec![next], "{out}");
+    assert_eq!(status_count(&out, "parked"), 0, "no re-report: {out}");
+    assert_eq!(s.status(33).unwrap()[0].parked, 1);
+}
+
+#[test]
+fn a_retry_is_served_even_when_a_new_filter_no_longer_matches_it() {
+    let (_d, mut s) = store();
+    let mut r = one("q");
+    r.lease = 10;
+    r.filter = Some(".payload.even".into());
+    s.subscribe("work", "a", Some(r.clone()), 0).unwrap();
+    let item = put(&mut s, "q", 0, 1);
+    assert_eq!(ids(&pull(&mut s, "work", "a", 2)), vec![item]);
+    r.filter = Some(".payload.even | not".into());
+    s.subscribe("work", "a", Some(r), 3).unwrap();
+    assert_eq!(ids(&pull(&mut s, "work", "a", 20)), vec![item], "retried");
+    assert_eq!(s.ack(item, "a", 21).unwrap(), AckOutcome::Acked);
+    assert_eq!(pull(&mut s, "work", "a", 22), "");
+    assert_eq!(s.status(22).unwrap()[0].unread, 0, "not pinned");
+    let odd = put(&mut s, "q", 1, 23);
+    assert_eq!(ids(&pull(&mut s, "work", "a", 24)), vec![odd]);
+}
+
+#[test]
+fn a_filter_that_fails_on_a_retry_is_not_counted_as_an_error() {
+    let (_d, mut s) = store();
+    let mut r = one("q");
+    r.lease = 10;
+    r.max_attempts = 3;
+    r.filter = Some(".payload.x | length > 0".into());
+    s.subscribe("work", "a", Some(r.clone()), 0).unwrap();
+    let item = s
+        .publish("q", None, &json!({"x": "y"}), 1, Retention::default())
+        .unwrap();
+    assert_eq!(ids(&pull(&mut s, "work", "a", 2)), vec![item]);
+    r.filter = Some(".payload.x + 1 > 0".into());
+    s.subscribe("work", "a", Some(r), 3).unwrap();
+    let mut errors = 0;
+    let mut got = Vec::new();
+    for now in [20, 40, 60, 80] {
+        let out = pull(&mut s, "work", "a", now);
+        errors += status_count(&out, "errors");
+        got.extend(ids(&out));
+    }
+    assert_eq!(got, vec![item, item], "two retries, then parked");
+    assert_eq!(errors, 0, "a retry does not run the filter");
+}
+
+#[test]
+fn a_pre_acked_row_after_the_scan_is_not_delivered() {
+    let (_d, mut s) = store();
+    s.subscribe("work", "a", Some(one("q")), 0).unwrap();
+    s.subscribe("work", "b", None, 0).unwrap();
+    let first = put(&mut s, "q", 1, 1);
+    let second = put(&mut s, "q", 2, 1);
+    assert_eq!(s.ack(second, "b", 2).unwrap(), AckOutcome::Acked);
+    assert_eq!(ids(&pull(&mut s, "work", "a", 3)), vec![first]);
+}
+
+#[test]
+fn a_held_item_is_not_given_to_a_second_taker_after_a_share_change_and_back() {
+    let (_d, mut s) = store();
+    let mut r = one("q");
+    r.limit = Some(1);
+    s.subscribe("work", "a", Some(r.clone()), 0).unwrap();
+    s.subscribe("work", "b", None, 0).unwrap();
+    let held = put(&mut s, "q", 1, 1);
+    let free = put(&mut s, "q", 2, 1);
+    assert_eq!(ids(&pull(&mut s, "work", "a", 2)), vec![held]);
+    let mut all = r.clone();
+    all.share = Share::All;
+    s.subscribe("work", "a", Some(all), 3).unwrap();
+    s.subscribe("work", "a", Some(r), 4).unwrap();
+    assert_eq!(ids(&pull(&mut s, "work", "b", 5)), vec![free]);
+}
+
+#[test]
+fn a_share_change_to_all_clears_leases() {
+    let (_d, mut s) = store();
+    s.subscribe("work", "a", Some(one("q")), 0).unwrap();
+    s.subscribe("work", "b", None, 0).unwrap();
+    let held = put(&mut s, "q", 1, 1);
+    assert_eq!(ids(&pull(&mut s, "work", "a", 2)), vec![held]);
+    s.subscribe("work", "a", Some(on_ack("q")), 3).unwrap();
+    assert_eq!(
+        s.ack(held, "b", 4).unwrap(),
+        AckOutcome::Acked,
+        "a share: one lease means nothing under share: all"
+    );
+}
+
+#[test]
+fn a_max_age_trim_of_an_open_lease_counts_one_drop_once() {
+    let (_d, mut s) = store();
+    s.subscribe("work", "a", Some(one("q")), 0).unwrap();
+    s.subscribe("work", "b", None, 0).unwrap();
+    let held = put(&mut s, "q", 1, 1);
+    assert_eq!(ids(&pull(&mut s, "work", "a", 2)), vec![held]);
+    let aged = Retention {
+        max_items: None,
+        max_age: Some(10),
+    };
+    let fresh = s.publish("q", None, &json!({"n": 2}), 100, aged).unwrap();
+    assert!(s.show(held).unwrap().is_none(), "trimmed");
+    let out = pull(&mut s, "work", "b", 101);
+    assert_eq!(ids(&out), vec![fresh], "{out}");
+    assert_eq!(status_count(&out, "dropped"), 1, "{out}");
+    let again = pull(&mut s, "work", "a", 102);
+    assert_eq!(status_count(&again, "dropped"), 0, "once: {again}");
+}
+
+#[test]
+fn an_open_lease_holds_the_retention_floor() {
+    let (_d, mut s) = store();
+    let mut r = one("q");
+    r.limit = Some(1);
+    s.subscribe("work", "a", Some(r), 0).unwrap();
+    s.subscribe("work", "b", None, 0).unwrap();
+    let held = put(&mut s, "q", 1, 1);
+    assert_eq!(ids(&pull(&mut s, "work", "a", 2)), vec![held]);
+    for n in 2..4 {
+        put(&mut s, "q", n, 3);
+        let id = ids(&pull(&mut s, "work", "b", 4))[0];
+        s.ack(id, "b", 5).unwrap();
+    }
+    let keep = Retention {
+        max_items: Some(1),
+        max_age: None,
+    };
+    s.publish("q", None, &json!({"n": 4}), 6, keep).unwrap();
+    assert!(
+        s.show(held).unwrap().is_some(),
+        "the open lease was trimmed"
+    );
+}
+
+#[test]
+fn the_floor_lets_a_parked_item_go_and_ignores_an_unbound_subscription() {
+    let (_d, mut s) = store();
+    let mut r = one("q");
+    r.lease = 1;
+    r.max_attempts = 1;
+    s.subscribe("work", "w", Some(r), 0).unwrap();
+    s.subscribe("gone", "g", Some(one("q")), 0).unwrap();
+    let parked = put(&mut s, "q", 1, 0);
+    assert_eq!(ids(&pull(&mut s, "work", "w", 1)), vec![parked]);
+    assert_eq!(
+        ids(&pull(&mut s, "gone", "g", 1)),
+        vec![parked],
+        "g's lease"
+    );
+    s.unsubscribe("gone", "g").unwrap();
+    assert_eq!(status_count(&pull(&mut s, "work", "w", 5), "parked"), 1);
+    let later = vec![put(&mut s, "q", 2, 6), put(&mut s, "q", 3, 6)];
+    assert_eq!(ids(&pull(&mut s, "work", "w", 7)), later);
+    for id in later {
+        s.ack(id, "w", 8).unwrap();
+    }
+    let keep = Retention {
+        max_items: Some(1),
+        max_age: None,
+    };
+    s.publish("q", None, &json!({"n": 4}), 10, keep).unwrap();
+    assert_eq!(s.count("q").unwrap(), 1);
+}
+
+#[test]
+fn a_pull_on_the_second_the_last_lease_expires_parks_the_item() {
+    let (_d, mut s) = store();
+    let mut r = one("q");
+    r.lease = 10;
+    r.max_attempts = 1;
+    s.subscribe("work", "a", Some(r), 0).unwrap();
+    let item = put(&mut s, "q", 1, 1);
+    assert_eq!(ids(&pull(&mut s, "work", "a", 100)), vec![item]);
+    let out = pull(&mut s, "work", "a", 110);
+    assert!(ids(&out).is_empty(), "redelivered past max_attempts: {out}");
+    assert_eq!(status_count(&out, "parked"), 1, "{out}");
+    assert_eq!(s.status(110).unwrap()[0].parked, 1);
+}
+
+#[test]
+fn a_pull_on_the_second_a_lease_expires_redelivers_the_item() {
+    let (_d, mut s) = store();
+    let mut r = one("q");
+    r.lease = 10;
+    r.max_attempts = 2;
+    s.subscribe("work", "a", Some(r), 0).unwrap();
+    let item = put(&mut s, "q", 1, 1);
+    assert_eq!(ids(&pull(&mut s, "work", "a", 100)), vec![item]);
+    assert_eq!(ids(&pull(&mut s, "work", "a", 110)), vec![item]);
+}
+
 #[test]
 fn rules_need_a_queue() {
     assert!(Rules::new("").check().is_err());
+}
+
+#[test]
+fn retries_come_first_within_the_limit_and_say_when_more_remain() {
+    let (_d, mut s) = store();
+    let mut r = one("q");
+    r.lease = 10;
+    r.limit = Some(1);
+    s.subscribe("work", "a", Some(r), 0).unwrap();
+    let first = put(&mut s, "q", 1, 1);
+    let second = put(&mut s, "q", 2, 1);
+    assert_eq!(ids(&pull(&mut s, "work", "a", 2)), vec![first]);
+    assert_eq!(ids(&pull(&mut s, "work", "a", 3)), vec![second]);
+    let st = &s.status(20).unwrap()[0];
+    assert_eq!((st.cursor, st.unread), (second, 2), "two retries: {st:?}");
+    let out = pull(&mut s, "work", "a", 20);
+    assert_eq!(ids(&out), vec![first], "oldest retry first: {out}");
+    assert_eq!(status_count(&out, "more"), 1, "a retry remains: {out}");
+    let fresh = put(&mut s, "q", 3, 20);
+    let out = pull(&mut s, "work", "a", 21);
+    assert_eq!(ids(&out), vec![second], "{out}");
+    assert_eq!(status_count(&out, "more"), 1, "the new row waits: {out}");
+    assert_eq!(ids(&pull(&mut s, "work", "a", 22)), vec![fresh]);
 }
 
 #[test]

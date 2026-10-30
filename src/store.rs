@@ -29,7 +29,7 @@ CREATE TABLE subscriptions (
   name TEXT PRIMARY KEY,
   queue TEXT NOT NULL,
   rules TEXT NOT NULL,
-  lwm INTEGER NOT NULL,
+  scan INTEGER NOT NULL,
   created_at INTEGER NOT NULL,
   dropped INTEGER NOT NULL DEFAULT 0,
   errors INTEGER NOT NULL DEFAULT 0,
@@ -60,6 +60,7 @@ CREATE TABLE leases (
   owner TEXT NOT NULL,
   expires_at INTEGER NOT NULL,
   attempts INTEGER NOT NULL,
+  parked INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (subscription, item)
 );
 ";
@@ -328,8 +329,8 @@ impl Store {
         let mut change = Change::None;
         if let Some(r) = &rules {
             r.check()?;
-            // A share one subscription has one position for all its
-            // subscribers, fixed when it is created or moved.
+            // A share one subscription has one scan position for all
+            // its subscribers, set when it is created or moved.
             let start = start_position(&tx, r)?;
             let old_share = load_rules(&tx, name).ok().map(|o| o.share);
             let old: Option<String> = tx
@@ -340,7 +341,7 @@ impl Store {
                 )
                 .optional()?;
             tx.execute(
-                "INSERT INTO subscriptions(name, queue, rules, lwm, created_at)
+                "INSERT INTO subscriptions(name, queue, rules, scan, created_at)
                  VALUES (?1, ?2, ?3, ?5, ?4)
                  ON CONFLICT(name) DO UPDATE SET queue = excluded.queue, rules = excluded.rules",
                 params![name, r.queue, serde_json::to_string(r)?, now, start],
@@ -352,25 +353,31 @@ impl Store {
             };
             if change == Change::Replaced && old_share != Some(r.share) {
                 // Each share mode keeps its own position; carry the
-                // read position across so no item comes back.
+                // read position across so no item comes back. Leases
+                // mean nothing under share all, so they go.
                 match r.share {
-                    Share::One => tx.execute(
-                        "UPDATE subscriptions SET lwm = coalesce(
-                           (SELECT min(cursor) FROM subscribers WHERE subscription = ?1), lwm)
-                         WHERE name = ?1",
-                        [name],
-                    )?,
-                    Share::All => tx.execute(
-                        "UPDATE subscribers SET cursor = max(cursor,
-                           (SELECT lwm FROM subscriptions WHERE name = ?1))
-                         WHERE subscription = ?1",
-                        [name],
-                    )?,
-                };
+                    Share::One => {
+                        tx.execute(
+                            "UPDATE subscriptions SET scan = coalesce(
+                               (SELECT min(cursor) FROM subscribers WHERE subscription = ?1), scan)
+                             WHERE name = ?1",
+                            [name],
+                        )?;
+                    }
+                    Share::All => {
+                        tx.execute(
+                            "UPDATE subscribers SET cursor = max(cursor,
+                               (SELECT scan FROM subscriptions WHERE name = ?1))
+                             WHERE subscription = ?1",
+                            [name],
+                        )?;
+                        tx.execute("DELETE FROM leases WHERE subscription = ?1", [name])?;
+                    }
+                }
             }
             if matches!(change, Change::Moved { .. }) {
                 tx.execute(
-                    "UPDATE subscriptions SET lwm = ?2, dropped = 0, errors = 0, parked = 0,
+                    "UPDATE subscriptions SET scan = ?2, dropped = 0, errors = 0, parked = 0,
                        last_error = NULL
                      WHERE name = ?1",
                     params![name, start],
@@ -650,22 +657,29 @@ impl Store {
     }
 
     /// Every subscriber's position at clock `now`. For a `share: one`
-    /// subscription the position, the unread count, and the unreported
-    /// counts are the subscription's. `parked` counts the items parked
-    /// now; `dropped` and `errors` count what no pull has reported yet.
+    /// subscription the position is the subscription's scan, unread
+    /// counts the unacked rows after it plus the leases a pull would
+    /// retry, and the unreported counts are the subscription's.
+    /// `parked` counts the items parked now; `dropped` and `errors`
+    /// count what no pull has reported yet.
     pub fn status(&self, now: i64) -> Result<Vec<SubscriberState>> {
         let mut st = self.conn.prepare(
             "SELECT s.subscription, s.subscriber, p.queue,
-               CASE WHEN json_extract(p.rules, '$.share') = 'one' THEN p.lwm ELSE s.cursor END AS pos,
+               CASE WHEN json_extract(p.rules, '$.share') = 'one' THEN p.scan ELSE s.cursor END AS pos,
                s.next_at,
                CASE WHEN json_extract(p.rules, '$.share') = 'one' THEN p.dropped ELSE s.dropped END,
                CASE WHEN json_extract(p.rules, '$.share') = 'one'
-                 THEN (SELECT count(*) FROM items i WHERE i.queue = p.queue AND i.id > p.lwm
+                 THEN (SELECT count(*) FROM items i WHERE i.queue = p.queue AND i.id > p.scan
                          AND NOT EXISTS (SELECT 1 FROM acks a WHERE a.subscription = p.name AND a.item = i.id))
+                    + (SELECT count(*) FROM leases l JOIN items i ON i.id = l.item
+                         WHERE l.subscription = p.name AND l.parked = 0 AND l.expires_at <= ?1
+                           AND l.attempts < json_extract(p.rules, '$.max_attempts')
+                           AND NOT EXISTS (SELECT 1 FROM acks a WHERE a.subscription = p.name AND a.item = l.item))
                  ELSE (SELECT count(*) FROM items i WHERE i.queue = p.queue AND i.id > s.cursor) END,
                CASE WHEN json_extract(p.rules, '$.share') = 'one' THEN p.errors ELSE s.errors END,
                (SELECT count(*) FROM leases l WHERE l.subscription = p.name
-                  AND l.attempts >= json_extract(p.rules, '$.max_attempts') AND l.expires_at <= ?1),
+                  AND (l.parked = 1 OR (l.attempts >= json_extract(p.rules, '$.max_attempts')
+                                        AND l.expires_at <= ?1))),
                CASE WHEN json_extract(p.rules, '$.share') = 'one' THEN p.last_error ELSE s.last_error END
              FROM subscribers s JOIN subscriptions p ON p.name = s.subscription
              ORDER BY s.subscription, s.subscriber",
@@ -796,16 +810,25 @@ fn pull_in(
     };
     let filter = rules.filter.as_deref().map(Expr::compile).transpose()?;
     let template = rules.template.as_deref().map(Expr::compile).transpose()?;
-    let (lwm, p_dropped, p_errors, p_parked): (i64, i64, i64, i64) = tx.query_row(
-        "SELECT lwm, dropped, errors, parked FROM subscriptions WHERE name = ?1",
+    let one = rules.share == Share::One;
+    let limit = rules.limit.unwrap_or(usize::MAX);
+    if one {
+        park(tx, name, &rules, opts.now)?;
+    }
+    let (scan_pos, p_dropped, p_errors, p_parked): (i64, i64, i64, i64) = tx.query_row(
+        "SELECT scan, dropped, errors, parked FROM subscriptions WHERE name = ?1",
         [name],
         |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
     )?;
-    let from = match rules.share {
-        Share::All => cursor,
-        Share::One => lwm,
-    };
+    let from = if one { scan_pos } else { cursor };
     let latest = rules.select == Select::Latest;
+    // share one serves retries before new rows, as a work queue does.
+    let retries = if one {
+        retries(tx, name, &rules, opts.now, limit)?
+    } else {
+        Vec::new()
+    };
+    let retries_full = retries.len() as i64 == SCAN;
     let rows = scan(tx, &rules.queue, from, latest)?;
     let window_full = rows.len() as i64 == SCAN;
     let head = if latest {
@@ -814,12 +837,10 @@ fn pull_in(
         None
     };
 
-    // Rows the filter failed on, and parked rows. Each counts once, in
-    // the pull whose committed position moves past it.
+    // Rows the filter failed on. Each counts once, in the pull whose
+    // committed position moves past it.
     let mut errors: Vec<(i64, String)> = Vec::new();
-    let mut parked: Vec<i64> = Vec::new();
-    let mut matched: Vec<bool> = Vec::with_capacity(rows.len());
-    let mut candidates: Vec<&Row> = Vec::new();
+    let mut candidates: Vec<&Row> = retries.iter().collect();
     for row in &rows {
         let ok = match &filter {
             None => true,
@@ -831,22 +852,13 @@ fn pull_in(
                 }
             },
         };
-        matched.push(ok);
         if !ok {
             continue;
         }
-        if rules.share == Share::One {
-            if is_acked(tx, name, row.id)? {
-                continue;
-            }
-            let lease = lease_of(tx, name, row.id)?;
-            if is_parked(lease.as_ref(), &rules, opts.now) {
-                parked.push(row.id);
-                continue;
-            }
-            if lease.is_some_and(|(_, until, _)| until > opts.now) {
-                continue;
-            }
+        // A new row that is acked, under a live lease, or parked is not
+        // work; one with an expired open lease comes back as a retry.
+        if one && (is_acked(tx, name, row.id)? || has_lease(tx, name, row.id)?) {
+            continue;
         }
         candidates.push(row);
         if latest && candidates.len() == rules.limit.unwrap_or(usize::MAX) {
@@ -860,7 +872,6 @@ fn pull_in(
     // items in the rest.
     let room = budget.saturating_sub(status_max(name.len(), subscriber.len()));
     let tagged = rules.consume == Consume::OnAck;
-    let limit = rules.limit.unwrap_or(usize::MAX);
     let mut lines: Vec<String> = Vec::new();
     let mut used = 0;
     let mut delivered: Vec<i64> = Vec::new();
@@ -895,7 +906,7 @@ fn pull_in(
         delivered: delivered.len(),
         // A `latest` pull that delivered skips older items by design,
         // so a budget stop there has nothing to pull again.
-        more: starved || (!latest && (stopped || window_full)),
+        more: starved || (!latest && (stopped || window_full || retries_full)),
         ..Status::default()
     };
     if !delivered.is_empty() && rules.consume == Consume::OnAck {
@@ -932,6 +943,11 @@ fn pull_in(
                              VALUES (?1, ?2, ?3, ?4)",
                             params![name, id, subscriber, opts.now],
                         )?;
+                        // A retry after a switch to on-read is done now.
+                        tx.execute(
+                            "DELETE FROM leases WHERE subscription = ?1 AND item = ?2",
+                            params![name, id],
+                        )?;
                     }
                     Consume::OnAck => {
                         tx.execute(
@@ -944,12 +960,20 @@ fn pull_in(
                     }
                 }
             }
-            let new_lwm = advance_lwm(tx, name, &rules, from, &rows, &matched, opts.now)?;
+            // The scan moves past every new row evaluated, as a share
+            // all cursor does. A stop keeps it at the last new row
+            // delivered; retries do not move it.
+            let fresh = delivered.get(retries.len().min(delivered.len())..);
+            let new_scan = if stopped {
+                fresh.and_then(<[i64]>::last).copied().unwrap_or(from)
+            } else {
+                rows.last().map_or(from, |r| r.id)
+            };
             tx.execute(
-                "UPDATE subscriptions SET lwm = ?2 WHERE name = ?1",
-                params![name, new_lwm],
+                "UPDATE subscriptions SET scan = ?2 WHERE name = ?1",
+                params![name, new_scan],
             )?;
-            new_lwm
+            new_scan
         }
     };
 
@@ -971,7 +995,7 @@ fn pull_in(
         Share::One => {
             status.errors = p_errors + new_errors;
             status.dropped = p_dropped;
-            status.parked = p_parked + parked.iter().filter(|id| **id <= position).count() as i64;
+            status.parked = p_parked;
             tx.execute(
                 "UPDATE subscriptions SET errors = 0, dropped = 0, parked = 0,
                    last_error = coalesce(?2, last_error)
@@ -1097,34 +1121,57 @@ fn lease_of(tx: &Connection, sub: &str, id: i64) -> Result<Option<(String, i64, 
         .optional()?)
 }
 
-/// The share: one low-water mark moves past leading rows that are done:
-/// filtered out, acked, or parked. A live lease holds it.
-/// The one parked test: an expired lease that used its last attempt.
-/// It holds whatever the subscription's consume mode is now, so a rule
-/// change cannot leave an item that is neither delivered nor passed.
-fn is_parked(lease: Option<&(String, i64, i64)>, rules: &Rules, now: i64) -> bool {
-    lease.is_some_and(|(_, until, attempts)| *until <= now && *attempts >= rules.max_attempts)
+/// Whether the subscription holds any lease on the item: live, expired,
+/// or parked.
+fn has_lease(tx: &Connection, sub: &str, id: i64) -> Result<bool> {
+    Ok(tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM leases WHERE subscription = ?1 AND item = ?2)",
+        params![sub, id],
+        |r| r.get(0),
+    )?)
 }
 
-fn advance_lwm(
-    tx: &Connection,
-    sub: &str,
-    rules: &Rules,
-    from: i64,
-    rows: &[Row],
-    matched: &[bool],
-    now: i64,
-) -> Result<i64> {
-    let mut lwm = from;
-    for (row, ok) in rows.iter().zip(matched) {
-        let parked = is_parked(lease_of(tx, sub, row.id)?.as_ref(), rules, now);
-        if !ok || is_acked(tx, sub, row.id)? || parked {
-            lwm = row.id;
-        } else {
-            break;
-        }
+/// Park every open lease that expired on its last attempt, and add them
+/// to the subscription's one-time parked count in the same transaction.
+/// A lease expires at the second its time ends. Parked is a recorded
+/// state: it is set once, so a later `max_attempts` cannot revive the
+/// item or count it again.
+fn park(tx: &Connection, sub: &str, rules: &Rules, now: i64) -> Result<()> {
+    let n = tx.execute(
+        "UPDATE leases SET parked = 1
+         WHERE subscription = ?1 AND parked = 0 AND expires_at <= ?2 AND attempts >= ?3
+           AND EXISTS (SELECT 1 FROM items i WHERE i.id = leases.item)
+           AND NOT EXISTS (SELECT 1 FROM acks a WHERE a.subscription = ?1 AND a.item = leases.item)",
+        params![sub, now, rules.max_attempts],
+    )?;
+    if n > 0 {
+        tx.execute(
+            "UPDATE subscriptions SET parked = parked + ?2 WHERE name = ?1",
+            params![sub, n as i64],
+        )?;
     }
-    Ok(lwm)
+    Ok(())
+}
+
+/// The items a share one pull retries: expired, unparked, unacked
+/// leases on retained items, oldest first. One more than `limit` is
+/// read, so a pull knows when retries remain. The item matched the
+/// filter when it was first leased, so the filter does not run again.
+fn retries(tx: &Connection, sub: &str, rules: &Rules, now: i64, limit: usize) -> Result<Vec<Row>> {
+    let bound = i64::try_from(limit).map_or(SCAN, |l| l.saturating_add(1).min(SCAN));
+    let mut st = tx.prepare_cached(
+        "SELECT i.id, i.queue, i.key, i.payload, i.created_at
+         FROM leases l JOIN items i ON i.id = l.item
+         WHERE l.subscription = ?1 AND l.parked = 0 AND l.expires_at <= ?2 AND l.attempts < ?3
+           AND i.queue = ?4
+           AND NOT EXISTS (SELECT 1 FROM acks a WHERE a.subscription = ?1 AND a.item = l.item)
+         ORDER BY l.item LIMIT ?5",
+    )?;
+    let rows = st.query_map(
+        params![sub, now, rules.max_attempts, rules.queue, bound],
+        row_from,
+    )?;
+    Ok(rows.collect::<std::result::Result<_, _>>()?)
 }
 
 /// Items this subscriber was shown in earlier pulls and nobody in the
@@ -1171,8 +1218,9 @@ fn cut(line: &str, room: usize, id: i64) -> String {
 }
 
 /// Drop old items. `max_items` never trims past the lowest unread
-/// position of any subscription; `max_age` trims regardless and counts,
-/// per subscriber, the dropped items its filter would have delivered.
+/// position of any bound subscription, nor a share one item under an
+/// open lease (neither acked nor parked); `max_age` trims regardless
+/// and counts the dropped items each position would have delivered.
 fn trim(tx: &Connection, queue: &str, now: i64, r: Retention) -> Result<()> {
     let mut cutoff = 0_i64;
     if let Some(max) = r.max_items {
@@ -1186,8 +1234,13 @@ fn trim(tx: &Connection, queue: &str, now: i64, r: Retention) -> Result<()> {
                SELECT s.cursor AS pos FROM subscribers s JOIN subscriptions p ON p.name = s.subscription
                  WHERE p.queue = ?1 AND json_extract(p.rules, '$.share') IS NOT 'one'
                UNION ALL
-               SELECT p.lwm FROM subscriptions p WHERE p.queue = ?1 AND json_extract(p.rules, '$.share') = 'one'
-                 AND EXISTS (SELECT 1 FROM subscribers s WHERE s.subscription = p.name))",
+               SELECT p.scan FROM subscriptions p WHERE p.queue = ?1 AND json_extract(p.rules, '$.share') = 'one'
+                 AND EXISTS (SELECT 1 FROM subscribers s WHERE s.subscription = p.name)
+               UNION ALL
+               SELECT l.item - 1 FROM leases l JOIN subscriptions p ON p.name = l.subscription
+                 WHERE p.queue = ?1 AND json_extract(p.rules, '$.share') = 'one' AND l.parked = 0
+                   AND EXISTS (SELECT 1 FROM subscribers s WHERE s.subscription = p.name)
+                   AND NOT EXISTS (SELECT 1 FROM acks a WHERE a.subscription = p.name AND a.item = l.item))",
             [queue],
             |row| row.get(0),
         )?;
@@ -1223,10 +1276,12 @@ fn trim(tx: &Connection, queue: &str, now: i64, r: Retention) -> Result<()> {
 /// Before a trim to `cutoff`, count the items each position has not
 /// received that its filter would deliver, and move the position to the
 /// cutoff. A `share: one` subscription has one position and one count,
-/// on its own row; a `share: all` subscriber has its own.
+/// on its own row, and its count includes the items trimmed under an
+/// open lease (neither acked nor parked); a `share: all` subscriber has
+/// its own.
 fn count_drops(tx: &Connection, queue: &str, cutoff: i64) -> Result<()> {
     let mut st = tx.prepare(
-        "SELECT p.name, p.rules, p.lwm, s.subscriber, s.cursor
+        "SELECT p.name, p.rules, p.scan, s.subscriber, s.cursor
          FROM subscriptions p JOIN subscribers s ON s.subscription = p.name WHERE p.queue = ?1
          ORDER BY p.name, s.subscriber",
     )?;
@@ -1237,11 +1292,11 @@ fn count_drops(tx: &Connection, queue: &str, cutoff: i64) -> Result<()> {
         .collect::<std::result::Result<_, _>>()?;
     drop(st);
     let mut counted: Option<String> = None;
-    for (name, rules, lwm, subscriber, cursor) in subs {
+    for (name, rules, scan_pos, subscriber, cursor) in subs {
         let rules: Rules = serde_json::from_str(&rules)?;
         let one = rules.share == Share::One;
-        let pos = if one { lwm } else { cursor };
-        if pos >= cutoff {
+        let pos = if one { scan_pos } else { cursor };
+        if !one && pos >= cutoff {
             continue;
         }
         if one && counted.as_deref() == Some(name.as_str()) {
@@ -1273,7 +1328,16 @@ fn count_drops(tx: &Connection, queue: &str, cutoff: i64) -> Result<()> {
             }
         }
         if one {
-            // The lwm moves after the loop, so each row here reads the
+            // Items behind the scan that a lease still held open.
+            lost += tx.query_row(
+                "SELECT count(*) FROM leases l JOIN items i ON i.id = l.item
+                 WHERE l.subscription = ?1 AND i.queue = ?2 AND l.item <= min(?3, ?4)
+                   AND l.parked = 0
+                   AND NOT EXISTS (SELECT 1 FROM acks a WHERE a.subscription = ?1 AND a.item = l.item)",
+                params![name, queue, pos, cutoff],
+                |r| r.get::<_, i64>(0),
+            )?;
+            // The scan moves after the loop, so each row here reads the
             // old one; `counted` keeps the count to one per subscription.
             tx.execute(
                 "UPDATE subscriptions SET dropped = dropped + ?2 WHERE name = ?1",
@@ -1294,7 +1358,7 @@ fn count_drops(tx: &Connection, queue: &str, cutoff: i64) -> Result<()> {
         }
     }
     tx.execute(
-        "UPDATE subscriptions SET lwm = max(lwm, ?2)
+        "UPDATE subscriptions SET scan = max(scan, ?2)
          WHERE queue = ?1 AND json_extract(rules, '$.share') = 'one'
            AND EXISTS (SELECT 1 FROM subscribers s WHERE s.subscription = name)",
         params![queue, cutoff],

@@ -405,12 +405,11 @@ fn a_share_one_filter_error_is_counted_once_across_workers() {
     assert_eq!(ids(&second), vec![g2]);
     assert_eq!(
         count(&second, "work", "errors"),
-        0,
-        "a live lease holds the position before the bad item: {second}"
+        1,
+        "the scan passed the bad item, whatever a holds: {second}"
     );
     s.ack(g1, "a", 4).unwrap();
-    let third = pull(&mut s, "work", "a", 5);
-    assert_eq!(count(&third, "work", "errors"), 1, "{third}");
+    assert_eq!(pull(&mut s, "work", "a", 5), "", "counted once");
     assert_eq!(pull(&mut s, "work", "b", 6), "");
 }
 
@@ -472,8 +471,7 @@ fn a_status_only_pull_does_not_start_the_every_window() {
 #[test]
 fn a_parked_item_behind_a_live_lease_is_reported_once() {
     let (_d, mut s) = store();
-    // Item 2 parks while item 1 is still under a's live lease, so the
-    // shared position cannot pass item 2 yet.
+    // Item 2 parks while item 1 is still under a's live lease.
     let mut r = on_ack("q");
     r.share = Share::One;
     r.lease = 1000;
