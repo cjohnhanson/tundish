@@ -1,0 +1,7 @@
+doc: |
+  Item 2 waits for the window to pass.
+transitions:
+  - name: "pull --due after the window delivers the waiting item"
+    command: "tundish --now 4700 pull --due --as bot"
+    target: "../due-again"
+    stdout: "[news#2] {\"n\":2}\n"

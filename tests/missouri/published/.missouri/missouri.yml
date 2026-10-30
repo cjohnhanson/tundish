@@ -1,0 +1,7 @@
+doc: |
+  Item 1 waits in slack, unread by reader.
+transitions:
+  - name: "pull prints the batch and the ack hint"
+    command: "tundish --now 1002 pull inbox --as reader"
+    target: "../pulled"
+    stdout: "[slack#1] C1 {\"text\":\"hi\"}\nack: tundish ack <id> --as reader\n"
