@@ -37,6 +37,113 @@ fn on_ack(q: &str) -> Rules {
     r
 }
 
+fn pull_due(s: &mut Store, who: &str, opts: &PullOpts) -> String {
+    let mut out = Vec::new();
+    s.pull_due(who, opts, &mut out).unwrap();
+    String::from_utf8(out).unwrap()
+}
+
+fn ids(text: &str) -> Vec<i64> {
+    text.lines()
+        .filter_map(|l| l.strip_prefix('[')?.split_once(']'))
+        .filter_map(|(tag, _)| tag.rsplit_once('#')?.1.parse().ok())
+        .collect()
+}
+
+#[test]
+fn a_share_one_subscription_moved_to_a_queue_with_lower_ids_reads_it_all() {
+    let (_d, mut s) = store();
+    let b = vec![put(&mut s, "b", 1, 1), put(&mut s, "b", 2, 1)];
+    for n in 0..3 {
+        put(&mut s, "a", n, 1);
+    }
+    let mut r = Rules::new("a");
+    r.share = Share::One;
+    s.subscribe("work", "w", Some(r.clone()), 2).unwrap();
+    assert_eq!(ids(&pull(&mut s, "work", "w", 3)).len(), 3);
+    r.queue = "b".into();
+    s.subscribe("work", "w", Some(r), 4).unwrap();
+    assert_eq!(ids(&pull(&mut s, "work", "w", 5)), b);
+}
+
+#[test]
+fn a_parked_item_does_not_hold_retention() {
+    let (_d, mut s) = store();
+    let mut r = on_ack("q");
+    r.share = Share::One;
+    r.lease = 1;
+    r.max_attempts = 1;
+    s.subscribe("work", "w", Some(r), 0).unwrap();
+    put(&mut s, "q", 1, 0);
+    pull(&mut s, "work", "w", 1);
+    assert!(pull(&mut s, "work", "w", 5).contains("parked"));
+    let later = vec![put(&mut s, "q", 2, 6), put(&mut s, "q", 3, 6)];
+    pull(&mut s, "work", "w", 7);
+    for id in later {
+        s.ack(id, "w", 8).unwrap();
+    }
+    pull(&mut s, "work", "w", 9);
+    let keep = Retention {
+        max_items: Some(1),
+        max_age: None,
+    };
+    s.publish("q", None, &json!({"n": 4}), 10, keep).unwrap();
+    assert_eq!(s.count("q").unwrap(), 1, "the parked head held the floor");
+}
+
+#[test]
+fn a_due_pull_reports_a_drop_even_with_no_items() {
+    let (_d, mut s) = store();
+    let mut r = Rules::new("q");
+    r.filter = Some(".payload.even".into());
+    s.subscribe("feed", "a", Some(r), 0).unwrap();
+    put(&mut s, "q", 0, 1);
+    let aged = Retention {
+        max_items: None,
+        max_age: Some(10),
+    };
+    s.publish("q", None, &json!({"n": 1, "even": false}), 100, aged)
+        .unwrap();
+    let out = pull_due(&mut s, "a", &PullOpts::at(101));
+    assert!(ids(&out).is_empty(), "{out}");
+    assert!(out.contains("1 unread item in feed was dropped"), "{out}");
+}
+
+#[test]
+fn rules_need_a_queue() {
+    assert!(Rules::new("").check().is_err());
+}
+
+#[test]
+fn a_full_scan_window_with_no_match_says_pull_again() {
+    let (_d, mut s) = store();
+    let mut r = Rules::new("q");
+    r.filter = Some(".payload.n == -1".into());
+    s.subscribe("feed", "a", Some(r), 0).unwrap();
+    for n in 0..1001 {
+        put(&mut s, "q", n, 1);
+    }
+    let out = pull(&mut s, "feed", "a", 2);
+    assert!(out.contains("more in feed: pull again"), "{out}");
+}
+
+#[test]
+fn a_due_pull_stays_inside_its_byte_budget() {
+    let (_d, mut s) = store();
+    s.subscribe("a1", "z", Some(Rules::new("q1")), 0).unwrap();
+    let mut r = Rules::new("q2");
+    r.filter = Some(".payload.n | ascii_downcase".into());
+    s.subscribe("b1", "z", Some(r), 0).unwrap();
+    for n in 0..40 {
+        put(&mut s, "q1", n, 1);
+    }
+    put(&mut s, "q2", 1, 1);
+    let mut opts = PullOpts::at(2);
+    opts.max_bytes = 200;
+    let out = pull_due(&mut s, "z", &opts);
+    assert!(out.len() <= 200, "{} bytes: {out}", out.len());
+}
+
 #[test]
 fn a_database_with_a_newer_schema_is_refused() {
     let dir = tempfile::tempdir().unwrap();
@@ -229,6 +336,7 @@ fn cli(dir: &Path, args: &[&str]) -> std::process::Output {
         .arg("--config")
         .arg(config)
         .args(args)
+        .env_remove("GAFF_TIMEOUT_MS")
         .output()
         .unwrap()
 }
