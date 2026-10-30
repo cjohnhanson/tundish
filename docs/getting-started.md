@@ -43,13 +43,14 @@ tundish pull inbox --as reviewer
 ```
 
 ```text
+tundish: subscription=inbox subscriber=reviewer delivered=1 more=0 unacked=0 parked=0 errors=0 dropped=0 lease=0
 [slack#1] slack:C123 {"text":"Review PR 42"}
-ack: tundish ack <id> --as reviewer --subscription inbox
 ```
 
-The first line names the queue, item id, and key, then prints the payload.
-The last line gives the ack command. `<id>` stands for the integer in the
-item line.
+The status line names the subscription and subscriber and reports one
+delivered item. The item line starts with `[slack#1]`: queue `slack`, id
+`1`. The key and payload follow. Use that id and the names from the status
+line in the ack command below.
 
 ## Ack the item
 
@@ -99,8 +100,8 @@ Ask the agent to run `pwd`. After the tool batch, gaff runs the handler
 and injects tundish's output. In the new database used above, the batch is:
 
 ```text
+tundish: subscription=inbox subscriber=reviewer delivered=1 more=0 unacked=0 parked=0 errors=0 dropped=0 lease=0
 [slack#2] slack:C123 {"text":"PR 43 is ready for review"}
-ack: tundish ack <id> --as reviewer --subscription inbox
 ```
 
 The item has arrived in the agent's session. The

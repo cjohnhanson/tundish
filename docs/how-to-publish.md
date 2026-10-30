@@ -7,8 +7,8 @@ type: guide
 # Publish into tundish from a program
 
 A publisher calls `tundish.publish` from Python or runs `tundish publish`.
-Run it on the same machine as the agent's hook, with access to the same
-database.
+Run it on the same machine and as the same user as the agent's hook.
+Both read `~/.config/tundish/config.yml` and use its database.
 
 ## Publish from Python
 
@@ -28,11 +28,9 @@ print(item_id)
 ```
 
 `publish` returns the integer item id after committing the item. It calls
-the Rust library in-process. To use another database or config file,
-pass `db="/path/to/tundish.db"` or `config="/path/to/config.yml"`.
-A file named with `config=` must exist; a missing file raises `ValueError`
-with `<path>: no such config file`. When `config=` is omitted, only the
-fixed default path, `~/.config/tundish/config.yml`, may be absent; then
+the Rust library in-process. Set `database:` in
+`~/.config/tundish/config.yml` to choose the user's database. The default
+is `~/.local/state/tundish/tundish.db`. If the config file is absent,
 every default applies.
 
 Choose a queue for a source or kind of item, such as `slack` or `ci`.

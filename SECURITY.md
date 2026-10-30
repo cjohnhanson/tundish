@@ -59,10 +59,10 @@ the process through those functions. The jaq functions exposed by
 tundish provide no file or network access. Expressions still run in the
 tundish process; they do not have a separate resource sandbox.
 
-The default config is `~/.config/tundish/config.yml`. Home comes from
+The config path is fixed at `~/.config/tundish/config.yml`. Home comes from
 the passwd database, and the path takes no environment override.
-`--config` explicitly names another file. `--db` and the config's
-`database:` key can name another database.
+The config's `database:` key sets the user's database path. It defaults
+to `~/.local/state/tundish/tundish.db`.
 
 Rendered payload text remains publisher-supplied content. tundish does
 not decide whether an agent should follow instructions inside it. The

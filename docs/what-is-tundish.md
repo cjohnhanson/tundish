@@ -28,9 +28,9 @@ subscriptions can read the same queue with different filters or delivery
 rules. The publisher does not need to know about either subscription.
 
 A subscriber is a stable name, often an agent role such as `reviewer`.
-It binds to a subscription. Its cursor records progress across pulls and
+It binds to a subscription. Its position records progress across pulls and
 across sessions. With the default rules, each subscriber has its own
-cursor. With `share one`, subscribers use a shared position so that
+position. With `share one`, subscribers use a shared position so that
 successive pulls can divide the items among them.
 
 A new subscriber starts with every item still kept. The `start new` rule
@@ -69,7 +69,7 @@ list the combinations of `share` and `consume`.
 A hook already supplies the moment to run a pull. tundish does not need
 a daemon to wait for that moment. A publish or pull opens the SQLite
 database, does its work, and exits. SQLite holds the items, subscription
-rules, cursors, acks, and leases across those short processes.
+rules, positions, acks, and leases across those short processes.
 
 SQLite uses WAL mode, and writes run in transactions. Concurrent hooks
 therefore share one stored view of claims and positions. No network
@@ -77,18 +77,21 @@ listener or server sits between a publisher and the file. A publisher
 that receives Slack events can hold its own network connection and call
 the same Rust library through Python.
 
-The default file is `~/.local/state/tundish/tundish.db`. The
-[configuration](cli-reference.md#configuration) controls retention and
-can name another database.
+Each user has one database, set by `database:` in
+`~/.config/tundish/config.yml`. It defaults to
+`~/.local/state/tundish/tundish.db`. The publisher, handler, and agent
+read the same config and reach the same database. The
+[configuration](cli-reference.md#configuration) also controls retention.
 
 ## Pulls and hook events
 
 A pull stops at the subscription's `--limit`, when set, or its byte
-budget. `--max-bytes` defaults to 1024 bytes and has a minimum of 128;
-there is no default item limit. An item too large to fit can arrive as a
-cut line with a command to read it in full. Footer lines count against
-the budget but can exceed it. The [CLI reference](cli-reference.md#pull)
-gives the output rules and limits.
+budget. `--max-bytes` defaults to 1024 bytes and has a minimum of 400;
+there is no default item limit. Each subscription's output starts with a
+status line, followed by its items. The first matching item is delivered
+even if it must be cut to fit, ending with `… tundish show <id>`.
+Output, including status lines, never exceeds the budget. The
+[CLI reference](cli-reference.md#pull) gives the output rules and limits.
 
 A hook can call `pull --due` after every tool batch. The subscription's
 interval controls how often it delivers items. A pull that prints no
@@ -121,9 +124,10 @@ position and can be removed by the count limit.
 
 An age limit makes a different choice. It removes old items even when
 a subscriber has not read them. tundish records the number of unread
-matching items lost. A named pull or a due pull reports that count once,
-even without delivering an item from the subscription. The notice lets
-a subscriber distinguish an empty queue from missing history.
+matching items lost. A named pull or a due pull reports that count once
+as `dropped=` in the status line, even without delivering an item from
+the subscription. That count distinguishes an empty queue from missing
+history.
 
 Retention runs on publish. With no daemon, an idle queue does not remove
 items at the instant they reach the age limit. A queue absent from the

@@ -7,8 +7,9 @@ type: guide
 # Deliver tundish items through a gaff handler
 
 Install [gaff](https://github.com/cjohnhanson/gaff) and configure its hooks
-for your agent host. Install tundish on the same machine. The publisher
-and the handler must use the same database.
+for your agent host. Install tundish on the same machine. Run the
+publisher, handler, and agent as the same user. They read
+`~/.config/tundish/config.yml` and use its database.
 
 ## Set a subscription interval
 
@@ -68,15 +69,18 @@ To restrict the handler to a repository, add a `when` field to the entry:
     when: {cwd_prefix: /path/to/repo}
 ```
 
-If you use another database, put `--db` and its absolute path in the
-command before `pull`. If you use another config file, add `--config`
-and its absolute path there too. The named config file must exist.
+To set the database path, use `database:` in
+`~/.config/tundish/config.yml`. Use an absolute path so the handler can
+run from any working directory. Without that setting, the database is
+`~/.local/state/tundish/tundish.db`.
 
 The handler's `every` counts tool calls. The subscription's `--every`
 counts time since the last pull that printed an item. With `--every 5m`,
 `pull --due` delivers this subscription's items at most once every five
-minutes. When it delivers no item, it omits the unacked and parked counts.
-Filter-error and retention-drop notices print once even without an item.
+minutes. Each subscription that prints anything starts with a status
+line. Its `unacked=` count covers earlier deliveries only when the pull
+delivers an item. The `parked=`, `errors=`, and `dropped=` counts report
+events once, even without an item.
 An empty pull does not start a window. An idle session waits
 for its next hook event, even after five minutes pass.
 
@@ -84,7 +88,7 @@ A bound subscriber with nothing due and nothing to report gets no output
 and exit 0. If the subscriber holds no subscription, `pull --due` exits 2
 and prints
 `tundish: <who> holds no subscription, so nothing can be due: tundish subscribe <name> --as <who>`.
-Check `--as` and `--db` in the handler for a typo.
+A typo in the handler's `--as` value can cause this exit.
 
 ## Allow the handler in the working directory
 
@@ -111,7 +115,7 @@ Ask the agent to run a command, such as `pwd`. At the next tool batch,
 gaff injects the due batch. If the subscription has delivered in the last
 five minutes, wait for the window to pass and trigger another tool batch.
 
-To inspect the subscription's cursor and next delivery time:
+To inspect the subscription's position and next delivery time:
 
 ```sh
 tundish status
@@ -131,8 +135,10 @@ again under this subscription's `share all` rules.
 
 The example uses tundish's default 1024-byte pull budget and the same
 `max_bytes` in gaff. If you change one, change the other. tundish includes
-the footer lines in its budget. See the
-[pull reference](cli-reference.md#pull) for limits on very small budgets.
+each status line in its budget and never exceeds it. The minimum is
+400 bytes. A due pull reserves room for each subscription's status line;
+subscriptions that do not fit stay due for the next pull. See the
+[pull reference](cli-reference.md#pull) for truncation rules.
 
 gaff passes `GAFF_TIMEOUT_MS` to the command. If the deadline passes
 before the commit, tundish rolls back and exits 1. gaff discards that

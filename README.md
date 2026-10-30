@@ -58,17 +58,18 @@ rules: {"queue":"slack","select":"since_last_read","consume":"on_ack","share":"a
 The pull prints:
 
 ```text
+tundish: subscription=inbox subscriber=reviewer delivered=1 more=0 unacked=0 parked=0 errors=0 dropped=0 lease=0
 [slack#1] slack:C123 {"text":"Review PR 42"}
-ack: tundish ack <id> --as reviewer --subscription inbox
 ```
 
-To take responsibility for the item, run the ack command with its id.
+To take responsibility for the item, run
+`tundish ack 1 --as reviewer --subscription inbox`.
 Keep `reviewer` as a stable subscriber name across sessions.
 
 ## How it works
 
 A subscription stores a queue name, filter, template, and delivery rules.
-A cursor records delivery progress. By default, every subscriber
+A position records delivery progress. By default, every subscriber
 receives each matching item once. With `share one` and
 `on-ack`, a pull leases the item to one subscriber until an ack or lease
 expiry. Acks and leases belong to that subscription. Publishing and
