@@ -1,0 +1,26 @@
+[package]
+name = "tundish"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+clap = { version = "4.6.7", features = ["derive"] }
+clap_complete = "4"
+clap_mangen = "0.2"
+diataxis = { version = "0.1", default-features = false, features = ["cli"] }
+jaq-core = "3.1"
+jaq-json = "2.0"
+jaq-std = "3.0"
+mdstore = { version = "0.5", package = "mdstore-core" }
+rusqlite = { version = "0.40", features = ["bundled"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+thiserror = "2"
+yaml_serde = "0.10"
+
+[dev-dependencies]
+rusqlite = { version = "0.40", features = ["bundled"] }
+tempfile = "3.27.0"
+
+[build-dependencies]
+diataxis = { version = "0.1", default-features = false, features = ["build"] }
