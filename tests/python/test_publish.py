@@ -43,12 +43,15 @@ def test_publish_then_pull(tmp_path: Path) -> None:
     assert json.dumps({"text": "hi", "n": 1}, separators=(",", ":")) in out.stdout
 
 
-def test_bad_payload_is_a_value_error(tmp_path: Path) -> None:
+def test_an_empty_queue_is_a_value_error_from_rust(tmp_path: Path) -> None:
+    cfg = tmp_path / "t.yml"
+    cfg.write_text("format: 1\n")
     try:
-        tundish.publish("q", {1, 2}, db=tmp_path / "t.db", config=tmp_path / "t.yml")
-    except TypeError:
-        return  # json.dumps refuses a set before Rust sees it
-    raise AssertionError("a set is not JSON")
+        tundish.publish("", {}, db=tmp_path / "t.db", config=cfg)
+    except ValueError as e:
+        assert "queue" in str(e)
+        return
+    raise AssertionError("an empty queue name was accepted")
 
 
 def test_a_named_config_that_does_not_exist_is_a_value_error(tmp_path: Path) -> None:
