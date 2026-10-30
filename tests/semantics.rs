@@ -75,6 +75,23 @@ fn start_new_skips_the_backlog() {
 }
 
 #[test]
+fn a_late_worker_does_not_skip_a_share_one_backlog() {
+    let (_d, mut s) = store();
+    publish(&mut s, "q", 1, 0);
+    let mut r = Rules::new("q");
+    r.share = Share::One;
+    r.start = Start::New;
+    s.subscribe("work", "alice", Some(r), 1).unwrap();
+    let mut owed = publish(&mut s, "q", 3, 2);
+    s.subscribe("work", "bob", None, 3).unwrap();
+    owed.extend(publish(&mut s, "q", 1, 4));
+    let mut got = ids(&pull(&mut s, "work", "bob", 5));
+    got.extend(ids(&pull(&mut s, "work", "alice", 6)));
+    got.sort_unstable();
+    assert_eq!(got, owed, "every item after the subscription began");
+}
+
+#[test]
 fn filter_and_limit() {
     let (_d, mut s) = store();
     let mut r = Rules::new("q");

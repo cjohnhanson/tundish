@@ -332,6 +332,10 @@ fn dispatch(args: Args) -> Result<i32> {
                     subscriber,
                 });
             }
+            writeln!(
+                stdout,
+                "unbound {subscriber} from {name}; its read position was removed"
+            )?;
         }
         Command::Pull(p) => {
             let opts = PullOpts {

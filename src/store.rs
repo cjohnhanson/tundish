@@ -292,6 +292,9 @@ impl Store {
         let mut change = Change::None;
         if let Some(r) = &rules {
             r.check()?;
+            // A share one subscription has one position for all its
+            // subscribers, fixed when it is created or moved.
+            let start = start_position(&tx, r)?;
             let old: Option<String> = tx
                 .query_row(
                     "SELECT queue FROM subscriptions WHERE name = ?1",
@@ -301,9 +304,9 @@ impl Store {
                 .optional()?;
             tx.execute(
                 "INSERT INTO subscriptions(name, queue, rules, lwm, created_at)
-                 VALUES (?1, ?2, ?3, 0, ?4)
+                 VALUES (?1, ?2, ?3, ?5, ?4)
                  ON CONFLICT(name) DO UPDATE SET queue = excluded.queue, rules = excluded.rules",
-                params![name, r.queue, serde_json::to_string(r)?, now],
+                params![name, r.queue, serde_json::to_string(r)?, now, start],
             )?;
             change = match old {
                 None => Change::Created,
@@ -311,8 +314,10 @@ impl Store {
                 Some(q) => Change::Moved { from: q },
             };
             if matches!(change, Change::Moved { .. }) {
-                let start = start_position(&tx, r)?;
-                tx.execute("UPDATE subscriptions SET lwm = 0 WHERE name = ?1", [name])?;
+                tx.execute(
+                    "UPDATE subscriptions SET lwm = ?2 WHERE name = ?1",
+                    params![name, start],
+                )?;
                 tx.execute("DELETE FROM acks WHERE subscription = ?1", [name])?;
                 tx.execute("DELETE FROM leases WHERE subscription = ?1", [name])?;
                 tx.execute(
@@ -686,10 +691,14 @@ fn footer(
         ));
     }
     if notes.dropped > 0 {
-        f.push_str(&format!(
-            "{} unread items in {name} were dropped by retention\n",
-            notes.dropped
-        ));
+        f.push_str(&if notes.dropped == 1 {
+            format!("1 unread item in {name} was dropped by retention\n")
+        } else {
+            format!(
+                "{} unread items in {name} were dropped by retention\n",
+                notes.dropped
+            )
+        });
     }
     if more {
         f.push_str(&format!("more in {name}: pull again\n"));
@@ -735,7 +744,7 @@ fn pull_in(
     )?;
     let from = match rules.share {
         Share::All => cursor,
-        Share::One => lwm.max(origin),
+        Share::One => lwm,
     };
     let latest = rules.select == Select::Latest;
     let rows = scan(tx, &rules.queue, from, latest)?;

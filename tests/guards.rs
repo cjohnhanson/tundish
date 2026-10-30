@@ -148,6 +148,15 @@ fn the_drop_count_follows_the_filter_and_is_reported_once() {
         .unwrap();
     let again = pull(&mut s, "feed", "a", 103);
     assert!(!again.contains("dropped"), "reported twice: {again}");
+    let aged_one = Retention {
+        max_items: None,
+        max_age: Some(10),
+    };
+    put(&mut s, "q", 20, 104);
+    s.publish("q", None, &json!({"n": 22, "even": true}), 200, aged_one)
+        .unwrap();
+    let one = pull(&mut s, "feed", "a", 201);
+    assert!(one.contains("1 unread item in feed was dropped"), "{one}");
 }
 
 #[test]
@@ -239,6 +248,13 @@ fn the_cli_refuses_a_missing_item_an_absent_binding_and_bad_stored_rules() {
             .status
             .code(),
         Some(2)
+    );
+    assert!(cli(d, &["subscribe", "feed", "--as", "b"]).status.success());
+    let gone = cli(d, &["unsubscribe", "feed", "--as", "b"]);
+    assert!(gone.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&gone.stdout),
+        "unbound b from feed; its read position was removed\n"
     );
     assert!(cli(d, &["check"]).status.success());
     rusqlite::Connection::open(d.join("t.db"))
