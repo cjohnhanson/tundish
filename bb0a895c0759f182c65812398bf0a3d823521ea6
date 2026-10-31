@@ -1,0 +1,5 @@
+signoff[review-code] PASS bb0a895 not applicable: confirmed bb0a895 has the empty tree 4b825dc and no parent, and ls-tree -r lists no files, so there are no neighbors, abstractions, error paths or lint suppressions to judge
+signoff[review-deps] PASS bb0a895 not applicable: ls-tree -r on bb0a895 lists no files, so there is no manifest, lockfile, dependency, spawn, licence or install step to audit
+signoff[review-docs] PASS bb0a895 not applicable: the empty tree holds no README, agent-instruction file, help text, error message or comment, and the only prose, the commit title "chore: initial commit", is a conventional title with no undefined term
+signoff[review-tests] PASS bb0a895 not applicable: the commit message "chore: initial commit" records the goal, and the empty tree adds no behavior, guard, assertion or suite to map, mutate or run
+signoff[review-usability] PASS bb0a895 not applicable: the empty tree with no parent ships no tool, help text, output or documentation, so there is nothing to run cold or take a wrong turn against
