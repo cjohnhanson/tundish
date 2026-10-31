@@ -90,8 +90,8 @@ item_id = tundish.publish("slack", {"text": "hi"}, key="slack:C123")
 ## Documentation
 
 - [Getting started](docs/getting-started.md): publish, pull, ack, and receive an item through a hook
-- [Deliver tundish items through a gaff handler](docs/how-to-gaff.md): handler setup and delivery intervals
-- [Publish into tundish from a program](docs/how-to-publish.md): Python and Slack Socket Mode
+- [How to deliver tundish items through a gaff handler](docs/how-to-gaff.md): handler setup and delivery intervals
+- [How to publish into tundish from a program](docs/how-to-publish.md): Python and Slack Socket Mode
 - [CLI reference](docs/cli-reference.md): commands, rules, config, and exit codes
 - [What is tundish?](docs/what-is-tundish.md): queues, subscriptions, delivery, and retention
 

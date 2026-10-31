@@ -263,7 +263,7 @@ limit. Later items that do not fit wait for another pull under
 truncation.
 
 The ack command is documented by `tundish prime`
-and the [tundish skill](../skills/tundish/SKILL.md). It takes the item id
+and the [tundish skill](https://github.com/cjohnhanson/tundish/blob/main/skills/tundish/SKILL.md). It takes the item id
 from `[queue#id]` and the names from the status line. Inspect unacked items
 with `tundish list <queue> --unacked --subscription <s>`. Inspect filter
 error text with `tundish status`.

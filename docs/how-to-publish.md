@@ -1,10 +1,10 @@
 <!-- metadata
-title: "Publish into tundish from a program"
+title: "How to publish into tundish from a program"
 description: "Publish JSON from Python and receive Slack message events through Socket Mode"
 type: guide
 -->
 
-# Publish into tundish from a program
+# How to publish into tundish from a program
 
 A publisher calls `tundish.publish` from Python or runs `tundish publish`.
 Run it on the same machine and as the same user as the agent's hook.
