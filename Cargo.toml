@@ -1,6 +1,6 @@
 [package]
 name = "tundish"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 # 1.88: the code uses let-chains.
 rust-version = "1.88"
