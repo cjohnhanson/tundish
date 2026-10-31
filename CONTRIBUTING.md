@@ -126,8 +126,8 @@ runs tests, clippy, and fmt, and audits the lockfile. It also runs a
 publish dry run from an archive of `HEAD` and checks that the version
 is absent from crates.io.
 
-The release workflow needs `NPM_TOKEN` to publish npm packages and
-`HOMEBREW_TAP_TOKEN` to update the tap.
+The release workflow in `.github/workflows/release.yml` uses trusted publishing (OIDC) for crates.io, PyPI, and npm, so these registries need no repository tokens.
+Its only required repository secret is `HOMEBREW_TAP_TOKEN`, to update the tap.
 
 Bump the version in `Cargo.toml`, commit it on `main`, tag `v<version>`,
 and push the tag. The workflow checks that the tag is on `main` and
