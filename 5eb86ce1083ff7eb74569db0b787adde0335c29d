@@ -1,0 +1,5 @@
+signoff[review-code] PASS 5eb86ce the diff changes only the package version in Cargo.toml and the matching tundish entry in Cargo.lock (0.1.0 -> 0.1.1); no source file changed, and a CARGO_BUILD_JOBS=4 build succeeded
+signoff[review-deps] PASS 5eb86ce the only Cargo.lock change is the tundish package version line; no dependency version, checksum, or source changed, the dependencies list is untouched, and nothing new is spawned
+signoff[review-docs] PASS 5eb86ce grepped every tracked file except Cargo.lock for 0.1.0 and 0.1.1 and found no stale current-version statement; homebrew and npm keep 0.0.0 placeholders that the release build fills from Cargo.toml
+signoff[review-tests] PASS 5eb86ce no behavior changed and no guard was added; no test or missouri state pins 0.1.0, and the built binary prints tundish 0.1.1 for --version, the string the release probes check
+signoff[review-usability] PASS 5eb86ce ran ./target/debug/tundish --version after a fresh build and it prints tundish 0.1.1, matching Cargo.toml; no help text, error, or flag changed
