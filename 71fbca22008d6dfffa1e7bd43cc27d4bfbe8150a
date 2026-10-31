@@ -1,0 +1,5 @@
+signoff[review-code] PASS 71fbca2 no source file changed; the diff touches only README and docs markdown that the binary embeds; build is clean, and tundish docs serves both renamed how-to pages with their new H1s.
+signoff[review-deps] PASS 71fbca2 not applicable: Cargo.toml, Cargo.lock, workflows and scripts are untouched; the diff is 9 markdown lines; the three new links are documentation URLs, each verified at 200, and nothing calls them.
+signoff[review-docs] PASS 71fbca2 diataxis check reports no problems and export writes 5 pages; both new URLs return 200 and the README #install anchor exists; git grep finds no old title and no ../ link in the tree.
+signoff[review-tests] PASS 71fbca2 cargo test passes 134 tests with 0 failures and missouri passes 19 paths with 0 failures; the change adds no behavior or guard to mutate, and no test asserts on doc titles.
+signoff[review-usability] PASS 71fbca2 ran tundish docs, docs how-to-publish and docs how-to-gaff; each how-to page opens with its new How to heading, the README link text matches, and the cross-set links now open from a terminal.
