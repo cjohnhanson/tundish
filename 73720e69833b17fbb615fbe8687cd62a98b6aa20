@@ -1,0 +1,5 @@
+signoff[review-code] PASS 73720e6 tree 22c045f equals PR head 5eb86ce's tree, whose review-code PASS covers it; the diff from parent b9ee5e6 (tree cfd112e = 8c345a1's tree) is only the version line in Cargo.toml and Cargo.lock.
+signoff[review-deps] PASS 73720e6 tree 22c045f is byte-identical to 5eb86ce's tree, whose review-deps PASS found only the tundish version line changed in Cargo.lock; parent b9ee5e6's tree equals the audited 8c345a1 tree.
+signoff[review-docs] PASS 73720e6 tree 22c045f matches 5eb86ce's tree exactly, so its review-docs PASS applies; the diff from b9ee5e6 (tree identical to 8c345a1) changes no doc file, only Cargo.toml and Cargo.lock.
+signoff[review-tests] PASS 73720e6 tree 22c045f equals 5eb86ce's tree, whose review-tests PASS confirmed --version prints tundish 0.1.1; the base tree b9ee5e6 = 8c345a1 carries the mutation-tested PASS, and no test file differs.
+signoff[review-usability] PASS 73720e6 tree 22c045f is identical to 5eb86ce's tree, whose review-usability PASS ran the fresh build's --version; the diff from b9ee5e6 touches only Cargo.toml and Cargo.lock, and the commit message has no claude, session_, or anthropic mark.
