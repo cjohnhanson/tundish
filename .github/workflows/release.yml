@@ -433,10 +433,14 @@ jobs:
       contents: read
       id-token: write
     steps:
+      # Trusted publishing (OIDC) needs Node 22.14 or later and npm
+      # 11.5.1 or later. No token lives in this repository.
       - uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: "24"
           registry-url: "https://registry.npmjs.org"
+      - name: Use an npm that supports trusted publishing
+        run: npm install -g npm@11.6.2 && npm --version
       - uses: actions/download-artifact@v4
         with:
           name: npm-packages
@@ -456,12 +460,12 @@ jobs:
       # GitHub shorthand before it reads it as a folder, so `npm publish
       # npm/tundish-darwin-arm64` cloned `github.com/npm/tundish-darwin-arm64`
       # and failed on a key it has no reason to hold.
+      #
+      # Trusted publishing attaches provenance itself.
       - name: Publish
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          for d in ./npm/tundish-*; do npm publish "$d" --access public --provenance; done
-          npm publish ./npm/tundish --access public --provenance
+          for d in ./npm/tundish-*; do npm publish "$d" --access public; done
+          npm publish ./npm/tundish --access public
 
 
   debs:
