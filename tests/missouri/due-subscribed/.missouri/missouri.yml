@@ -1,0 +1,7 @@
+doc: |
+  bot subscribes to news as digest, with a one-hour window, at 1000.
+transitions:
+  - name: "publish a news item"
+    command: "tundish --now 1000 publish news '{\"n\":1}'"
+    target: "../due-published"
+    stdout: "1\n"

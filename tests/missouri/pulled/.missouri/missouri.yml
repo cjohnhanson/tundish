@@ -1,0 +1,7 @@
+doc: |
+  reader has item 1 and has not acked it.
+transitions:
+  - name: "ack the item"
+    command: "tundish --now 1003 ack 1 --as reader"
+    target: "../acked"
+    stdout: "acked 1\n"

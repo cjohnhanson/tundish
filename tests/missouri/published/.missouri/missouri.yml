@@ -1,0 +1,7 @@
+doc: |
+  Item 1 waits in slack, unread by reader.
+transitions:
+  - name: "pull prints the status line, then the batch"
+    command: "tundish --now 1002 pull inbox --as reader"
+    target: "../pulled"
+    stdout: "tundish: subscription=inbox subscriber=reader delivered=1 more=0 unacked=0 parked=0 errors=0 dropped=0 lease=0\n[slack#1] C1 {\"text\":\"hi\"}\n"

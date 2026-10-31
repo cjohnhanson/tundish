@@ -1,0 +1,47 @@
+doc: |
+  No database yet. config.yml sits in the state directory, and the
+  wrapper names it and tundish.db there, so the suite never touches
+  the user's own files. Every --now pins the clock.
+transitions:
+  - name: "subscribe a reader that acks"
+    command: "tundish --now 1000 subscribe inbox --as reader --queue slack --consume on-ack"
+    target: "../subscribed"
+    stdout: "created inbox\nbound reader to inbox\nrules: {\"queue\":\"slack\",\"select\":\"since_last_read\",\"consume\":\"on_ack\",\"share\":\"all\",\"lease\":600,\"max_attempts\":3,\"start\":\"all\"}\n"
+  - name: "subscribe a digest with an hourly window"
+    command: "tundish --now 1000 subscribe digest --as bot --queue news --every 1h"
+    target: "../due-subscribed"
+    stdout: "created digest\nbound bot to digest\nrules: {\"queue\":\"news\",\"select\":\"since_last_read\",\"consume\":\"on_read\",\"share\":\"all\",\"every\":3600,\"lease\":600,\"max_attempts\":3,\"start\":\"all\"}\n"
+
+assertions:
+  - name: "prime opens with the name and the one-line description"
+    command: "tundish prime | head -2"
+    stdout: "# tundish\nA local inbox that agents subscribe to\n"
+  - name: "prime ends by naming help and docs"
+    command: "tundish prime | tail -1"
+    stdout: "More: tundish --help; tundish docs\n"
+  - name: "check accepts the config with no subscriptions"
+    command: "tundish check"
+    stdout: "ok\n"
+  - name: "status on an empty inbox prints nothing"
+    command: "tundish status"
+    stdout: ""
+  - name: "list on an empty inbox prints nothing"
+    command: "tundish list"
+    stdout: ""
+  - name: "show of a missing item exits 2 and names it"
+    command: "tundish show 1; echo \"exit $?\""
+    stdout: "exit 2\n"
+    stderr: "tundish: no item 1\n"
+  - name: "pull from an unknown subscription exits 2"
+    command: "tundish pull nope --as reader; echo \"exit $?\""
+    stdout: "exit 2\n"
+    stderr: "tundish: no subscription named nope\n"
+  - name: "publish refuses text that is not JSON"
+    command: "tundish publish slack 'not json'"
+    should_fail: true
+  # An assertion runs in the directory the path's transitions use next,
+  # so this one writes its own config, names it, and removes it.
+  - name: "check refuses a config in a format it does not read"
+    command: "printf 'format: 2\\n' > bad.yml; tundish-bin --db tundish.db --config bad.yml check; rc=$?; rm bad.yml; echo \"exit $rc\""
+    stdout: "exit 2\n"
+    stderr: "tundish: bad.yml: format 2 is not one this tundish reads (1)\n"

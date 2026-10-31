@@ -1,0 +1,10 @@
+setup:
+  - name: "build tundish"
+    command: "cargo build --quiet --manifest-path ../../Cargo.toml"
+  # The committed bin/tundish wrapper execs this copy, so nothing that
+  # touches target/ mid-run can turn the wrapper into a self-exec loop.
+  - name: "copy tundish binary"
+    command: "cp ../../target/debug/tundish .missouri/bin/tundish-bin && chmod +x .missouri/bin/tundish-bin"
+
+env:
+  NO_COLOR: "1"

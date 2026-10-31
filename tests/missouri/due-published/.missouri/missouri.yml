@@ -1,0 +1,7 @@
+doc: |
+  The digest has never delivered, so it is due.
+transitions:
+  - name: "pull --due delivers a subscription that has never delivered"
+    command: "tundish --now 1000 pull --due --as bot"
+    target: "../due-pulled"
+    stdout: "tundish: subscription=digest subscriber=bot delivered=1 more=0 unacked=0 parked=0 errors=0 dropped=0 lease=0\n[news#1] {\"n\":1}\n"

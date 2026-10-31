@@ -1,0 +1,7 @@
+doc: |
+  The digest delivered at 1000; the next delivery is due at 4600.
+transitions:
+  - name: "a new item inside the window waits"
+    command: "tundish --now 1100 publish news '{\"n\":2}' >/dev/null && tundish --now 1200 pull --due --as bot"
+    target: "../due-waiting"
+    stdout: ""
