@@ -7,7 +7,7 @@ type: tutorial
 # Getting started with tundish
 
 Install tundish with one of the commands in the
-[README](../README.md#install). The examples use the default database
+[README](https://github.com/cjohnhanson/tundish#install). The examples use the default database
 and the subscriber name `reviewer`.
 
 ## Publish an item
@@ -105,5 +105,5 @@ tundish: subscription=inbox subscriber=reviewer delivered=1 more=0 unacked=0 par
 ```
 
 The item has arrived in the agent's session. The
-[tundish skill](../skills/tundish/SKILL.md) describes how an agent reads
+[tundish skill](https://github.com/cjohnhanson/tundish/blob/main/skills/tundish/SKILL.md) describes how an agent reads
 the batch and acks an item.

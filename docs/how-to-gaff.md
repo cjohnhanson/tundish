@@ -1,10 +1,10 @@
 <!-- metadata
-title: "Deliver tundish items through a gaff handler"
+title: "How to deliver tundish items through a gaff handler"
 description: "Inject due batches into an agent session with a gaff handler"
 type: guide
 -->
 
-# Deliver tundish items through a gaff handler
+# How to deliver tundish items through a gaff handler
 
 Install [gaff](https://github.com/cjohnhanson/gaff) and configure its hooks
 for your agent host. Install tundish on the same machine. Run the
