@@ -16,30 +16,25 @@ publisher, handler, and agent as the same user. They read
 Choose a stable subscriber name for the agent role. Set a five-minute
 interval for the `inbox` subscription:
 
-```sh
-tundish subscribe inbox --as reviewer --queue slack --consume on-ack --every 5m
-```
+If `inbox` already reads `slack` and `reviewer` is already bound:
 
-If `inbox` already reads `slack` and `reviewer` is already bound, this prints:
-
-```text
+```console
+$ tundish subscribe inbox --as reviewer --queue slack --consume on-ack --every 5m
 replaced the rules of inbox
 rules: {"queue":"slack","select":"since_last_read","consume":"on_ack","share":"all","every":300,"lease":600,"max_attempts":3,"start":"all"}
+
 ```
 
 With `--queue`, this command replaces all rules for `inbox`. If you have
 a filter, template, or other rules to keep, include their flags too.
-To bind another subscriber without changing the rules, omit `--queue`:
+To bind another subscriber without changing the rules, omit `--queue`.
+For a new binding:
 
-```sh
-tundish subscribe inbox --as maintainer
-```
-
-For a new binding, this prints:
-
-```text
+```console
+$ tundish subscribe inbox --as maintainer
 bound maintainer to inbox
 rules: {"queue":"slack","select":"since_last_read","consume":"on_ack","share":"all","every":300,"lease":600,"max_attempts":3,"start":"all"}
+
 ```
 
 ## Add the handler
@@ -82,11 +77,18 @@ An idle session waits for its next hook event.
 
 From a human terminal in the exact directory where the agent will start:
 
-```sh
-gaff trust
-gaff check --handlers
-gaff doctor
+```console
+$ gaff trust
+this directory may now run handlers: [CWD]
+consent is per directory. Another directory needs its own `gaff trust`.
+
+$ gaff check --handlers
+ok   tundish -> /absolute/path/to/tundish pull --due --as reviewer
+
 ```
+
+Then run `gaff doctor` there to confirm that the agent host's hooks are
+registered.
 
 gaff records trust for that directory. A subdirectory needs its own trust
 record. The `cwd_prefix` condition does not grant trust.
@@ -95,22 +97,30 @@ record. The `cwd_prefix` condition does not grant trust.
 
 Publish an item from another terminal:
 
-```sh
-tundish publish slack --key slack:C123 '{"text":"Review PR 42"}'
+```console
+$ tundish publish slack --key slack:C123 '{"text":"Review PR 42"}'
+1
+
 ```
 
 Ask the agent to run a command, such as `pwd`. At the next tool batch,
 gaff runs the handler. If no batch arrives, check the subscription's
 position and next delivery time:
 
-```sh
-tundish status
+```console
+$ tundish status
+inbox	maintainer	queue=slack	cursor=0	unread=1	next_at=0	dropped=0	errors=0	parked=0	last_error=
+inbox	reviewer	queue=slack	cursor=0	unread=1	next_at=0	dropped=0	errors=0	parked=0	last_error=
+
 ```
 
 For a manual pull that ignores the interval:
 
-```sh
-tundish pull inbox --as reviewer
+```console
+$ tundish pull inbox --as reviewer
+tundish: subscription=inbox subscriber=reviewer delivered=1 more=0 unacked=0 parked=0 errors=0 dropped=0 lease=0
+[slack#1] slack:C123 {"text":"Review PR 42"}
+
 ```
 
 A manual pull marks its output delivered. The handler will not print

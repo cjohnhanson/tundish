@@ -69,6 +69,22 @@ acks and competing acks, inspection commands, and delivery intervals.
 The merge gate requires at least one passing path and no failures.
 CI sets `MISSOURI_SANDBOX=preinstalled` for this suite.
 
+The docs are tests. `tests/docs.rs` runs every `console` block in
+README.md and docs/*.md against the built binary, in a scratch directory
+with its own database and a fixed clock, and checks that the command
+sections of docs/cli-reference.md equal the binary's `--help` output.
+Change a command's help in its doc comment in `src/cli.rs`, never in the
+page. To write real output into the pages, run one of these, then read
+the diff:
+
+```sh
+TRYCMD=overwrite cargo test --test docs
+SNAPSHOTS=overwrite cargo test --test docs
+```
+
+A command in any other fence is never run, so put every example command
+in a `console` block. Install commands are the exception.
+
 The merge gate checks that every required sign-off has vendored criteria
 and that every vendored criterion is required. `.gaff/gaff.yml`
 names `review-tests`, `review-docs`, `review-code`, `review-deps`, and

@@ -1,0 +1,7 @@
+handlers:
+  - name: tundish
+    command: [/absolute/path/to/tundish, pull, --due, --as, reviewer]
+    events: [tool_batch, stop]
+    every: {tool_calls: 1}
+    timeout_ms: 400
+    max_bytes: 1024

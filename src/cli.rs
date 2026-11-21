@@ -20,8 +20,26 @@ pub const EXIT_TAKEN: i32 = 3;
 
 static DOCS: &[(&str, &str)] = diataxis::embedded_docs!();
 
+/// The clap command tree. The docs test reads it to list every command
+/// the CLI reference covers.
+#[must_use]
+pub fn command() -> clap::Command {
+    use clap::CommandFactory as _;
+    Args::command()
+}
+
+/// The exit codes, as `run` and the Ack arm of `dispatch` return them.
+const EXIT_CODES: &str = "\
+Exit codes:
+  0  Success, including a pull with nothing to print
+  1  An error: invalid JSON, an expression error, a database or I/O error,
+     a missed deadline, or a failed docs request
+  2  A usage error: bad arguments, config, names, or rule values; an unknown
+     subscription; a missing binding; a missing item
+  3  An ack met another subscriber's ack or live lease";
+
 #[derive(Parser)]
-#[command(name = "tundish", version, about = ABOUT)]
+#[command(name = "tundish", version, about = ABOUT, after_long_help = EXIT_CODES)]
 pub struct Args {
     /// The database file, in place of `database:` in the config. A test
     /// seam: prime and the skill assume the configured database.
@@ -41,30 +59,73 @@ pub struct Args {
     command: Command,
 }
 
+// Each doc comment below describes its handler in `dispatch`, unless a
+// comment names another source. The first line is the `-h` summary.
 #[derive(Subcommand)]
 enum Command {
     /// Publish one JSON item to a queue; print its id
+    ///
+    /// The insert and the queue's retention trim commit in one transaction.
+    /// Reusing a key adds another item; it does not replace or deduplicate.
+    // Store::publish, src/store.rs: the empty-queue refusal and the trim.
     Publish {
+        /// The queue; it needs no setup, and the name cannot be empty
         queue: String,
         /// A label to filter on, such as `slack:C123`
         #[arg(long)]
         key: Option<String>,
-        /// The item; read from stdin when omitted
+        /// The item, any JSON value; read from stdin when omitted
         json: Option<String>,
     },
     /// Bind a subscriber to a subscription; with --queue, create or replace it
+    ///
+    /// With --queue, creates the subscription or replaces all its rules;
+    /// a rule flag left out takes its default. Without --queue, binds the
+    /// subscriber to an existing subscription and changes no rule. Run it
+    /// with only --as to print the stored rules.
+    ///
+    /// Prints, in order: `created <name>`, `replaced the rules of <name>`,
+    /// or `moved <name> from <queue>; ...` when --queue changed something;
+    /// `bound <subscriber> to <name>` when this call made the binding; and
+    /// always `rules: <the stored rules as JSON>`.
+    ///
+    /// Moving a subscription to another queue resets its positions and
+    /// removes its acks and leases.
+    // Store::subscribe, src/store.rs; the printed lines in dispatch.
     Subscribe(SubscribeArgs),
     /// Unbind a subscriber
+    ///
+    /// Removes the binding and its read position; the subscription stays,
+    /// even with no subscriber left. An absent binding exits 2.
+    // Store::unsubscribe, src/store.rs.
     Unsubscribe {
+        /// The subscription
         name: String,
+        /// The subscriber to unbind
         #[arg(long = "as")]
         subscriber: String,
     },
     /// Print the next batch for a subscriber and mark it delivered
+    ///
+    /// Each subscription that prints anything starts with a status line,
+    /// then one line per item. The batch prints and flushes before the
+    /// delivery commits, so a failure in between can repeat items on the
+    /// next pull. When GAFF_TIMEOUT_MS holds a number of milliseconds and
+    /// that deadline passes before the commit, the pull rolls back and
+    /// exits 1.
+    // Store::pull and Store::pull_due, src/store.rs; deadline() above.
     Pull(PullArgs),
     /// Ack an item by id
+    ///
+    /// Prints `acked <id>` for the first ack in the subscription and for a
+    /// repeat by the same subscriber. Prints `already acked by <owner> at
+    /// <unix time>` or `leased by <owner> until <unix time>` and exits 3
+    /// when another subscriber holds the item. An ack removes the lease.
+    // Store::ack_in, src/store.rs.
     Ack {
+        /// The item id, from `[queue#id]` in a pull
         id: i64,
+        /// The subscriber that takes the item
         #[arg(long = "as")]
         subscriber: String,
         /// The subscription to ack in; needed when the subscriber holds
@@ -73,27 +134,59 @@ enum Command {
         subscription: Option<String>,
     },
     /// Print one item as JSON
-    Show { id: i64 },
+    ///
+    /// Prints the item as indented JSON, with an `acks` array when any
+    /// subscription has acked it. A missing item exits 2.
+    // Store::show, src/store.rs.
+    Show {
+        /// The item id
+        id: i64,
+    },
     /// List queues, or the items in one queue
+    ///
+    /// Without a queue, prints each queue that holds items and its item
+    /// count, separated by a tab. With a queue, prints one JSON item per
+    /// line, the newest N oldest first. Listing moves no position.
+    // Store::queues and Store::list, src/store.rs.
     List {
+        /// The queue whose items to print
         queue: Option<String>,
         /// Only items no subscription has acked, or with --subscription,
         /// items that subscription has not acked
         #[arg(long)]
         unacked: bool,
+        /// With --unacked, the subscription whose acks count
         #[arg(long, requires = "unacked")]
         subscription: Option<String>,
-        /// The newest N items
+        /// The newest N items; `--limit=-1` prints every item
         #[arg(long, default_value_t = 50)]
         limit: i64,
     },
     /// Print every subscription and subscriber position
+    ///
+    /// Prints one tab-separated line per binding, by subscription then
+    /// subscriber: `<subscription> <subscriber> queue= cursor= unread=
+    /// next_at= dropped= errors= parked= last_error=`. `last_error` is the
+    /// most recent filter error as a JSON string, or empty.
+    // Store::status, src/store.rs.
     Status,
     /// Check the config and every subscription's expressions
+    ///
+    /// Prints `ok`, or names the first subscription whose rules fail and
+    /// exits 2.
+    // Rules::check, src/rules.rs.
     Check,
     /// Print what tundish is and how to use it, for an agent's context
+    ///
+    /// The text depends only on the binary; it opens no database and reads
+    /// no config.
+    // prime() above.
     Prime,
     /// Read the bundled documentation
+    ///
+    /// Without a topic, lists the pages. An unknown topic, a search with
+    /// no query, or a search with no match exits 1.
+    // The Docs arm of dispatch and diataxis::DocSet.
     Docs(diataxis::DocsArgs),
     /// Write the man pages into a directory (the package build uses this)
     #[command(hide = true)]
@@ -103,8 +196,11 @@ enum Command {
     GenCompletions { shell: clap_complete::Shell },
 }
 
+// The defaults named below are Rules::new and Rules::check in
+// src/rules.rs; durations parse in rules::duration.
 #[derive(ClapArgs)]
 struct SubscribeArgs {
+    /// The subscription: 1 to 64 of A-Z a-z 0-9 . _ : -
     name: String,
     /// The subscriber: a stable name, such as an agent's role
     #[arg(long = "as")]
@@ -112,33 +208,44 @@ struct SubscribeArgs {
     /// Create or replace the subscription on this queue
     #[arg(long)]
     queue: Option<String>,
-    /// A jaq expression per item; the item matches when any output is truthy
+    /// A jaq expression per item; the item matches when any output is
+    /// truthy [default: every item matches]
     #[arg(long, requires = "queue")]
     filter: Option<String>,
+    /// Which unseen items a pull takes; `latest` needs --limit and refuses
+    /// --share one [default: since-last-read]
     #[arg(long, value_enum, requires = "queue")]
     select: Option<SelectArg>,
+    /// The most items one pull delivers, at least 1 [default: no limit]
     #[arg(long, requires = "queue")]
     limit: Option<usize>,
+    /// When an item counts as done [default: on-read]
     #[arg(long, value_enum, requires = "queue")]
     consume: Option<ConsumeArg>,
+    /// Who gets an item [default: all]
     #[arg(long, value_enum, requires = "queue")]
     share: Option<ShareArg>,
-    /// Minimum time between deliveries for `pull --due`: 90s, 10m, 1h
+    /// Minimum time between deliveries for `pull --due`: 90, 30s, 10m, 2h,
+    /// 1d [default: none]
     #[arg(long, requires = "queue")]
     every: Option<String>,
-    /// A jaq expression per item that yields the printed text
+    /// A jaq expression per item that yields the printed text [default:
+    /// `[queue#id] key payload`]
     #[arg(long, requires = "queue")]
     template: Option<String>,
     /// How long a lease holds under --share one and --consume on-ack
+    /// [default: 600s]
     #[arg(long, requires = "queue")]
     lease: Option<String>,
-    /// Leases before an item is parked
+    /// Leases before an item is parked, at least 1 [default: 3]
     #[arg(long, requires = "queue")]
     max_attempts: Option<i64>,
+    /// Where a new subscriber starts [default: all]
     #[arg(long, value_enum, requires = "queue")]
     start: Option<StartArg>,
 }
 
+// Store::pull, Store::pull_due and check_budget in src/store.rs.
 #[derive(ClapArgs)]
 struct PullArgs {
     /// The subscription; omit with --due
@@ -147,6 +254,7 @@ struct PullArgs {
     /// Pull every subscription of this subscriber whose `every` window has passed
     #[arg(long)]
     due: bool,
+    /// The subscriber pulling
     #[arg(long = "as")]
     subscriber: String,
     /// The byte budget for the printed batch, at least 400
@@ -156,22 +264,30 @@ struct PullArgs {
 
 #[derive(Clone, Copy, clap::ValueEnum)]
 enum SelectArg {
+    /// Every unseen item, oldest first
     SinceLastRead,
+    /// The newest unseen items up to --limit; older unseen items are skipped
     Latest,
 }
 #[derive(Clone, Copy, clap::ValueEnum)]
 enum ConsumeArg {
+    /// Delivery is enough
     OnRead,
+    /// An item stays open until a subscriber acks it
     OnAck,
 }
 #[derive(Clone, Copy, clap::ValueEnum)]
 enum ShareArg {
+    /// Every subscriber gets every item
     All,
+    /// Each item goes to one subscriber
     One,
 }
 #[derive(Clone, Copy, clap::ValueEnum)]
 enum StartArg {
+    /// Every item still kept
     All,
+    /// Only items published after the subscriber joins
     New,
 }
 

@@ -41,25 +41,21 @@ commands below.
 
 ## Usage
 
-```sh
-tundish publish slack --key slack:C123 '{"text":"Review PR 42"}'
-tundish subscribe inbox --as reviewer --queue slack --consume on-ack
-tundish pull inbox --as reviewer
-```
+In a new database:
 
-In a new database, the publish prints `1` and the subscribe prints:
+```console
+$ tundish publish slack --key slack:C123 '{"text":"Review PR 42"}'
+1
 
-```text
+$ tundish subscribe inbox --as reviewer --queue slack --consume on-ack
 created inbox
 bound reviewer to inbox
 rules: {"queue":"slack","select":"since_last_read","consume":"on_ack","share":"all","lease":600,"max_attempts":3,"start":"all"}
-```
 
-The pull prints:
-
-```text
+$ tundish pull inbox --as reviewer
 tundish: subscription=inbox subscriber=reviewer delivered=1 more=0 unacked=0 parked=0 errors=0 dropped=0 lease=0
 [slack#1] slack:C123 {"text":"Review PR 42"}
+
 ```
 
 To take responsibility for the item, run

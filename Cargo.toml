@@ -40,7 +40,9 @@ yaml_serde = "0.10"
 
 [dev-dependencies]
 rusqlite = { version = "0.40", features = ["bundled"] }
+snapbox = "1.2"
 tempfile = "3.27.0"
+trycmd = "1.2"
 
 [build-dependencies]
 diataxis = { version = "0.1", default-features = false, features = ["build"] }

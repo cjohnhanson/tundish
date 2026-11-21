@@ -107,16 +107,18 @@ the short `tundish pull` command.
 
 Replace `C123` with your channel id:
 
-```sh
-tundish subscribe channel --as reviewer --queue slack --start new \
-  --filter '.key == "slack:C123"' \
-  --template '"[\(.queue)#\(.id)] \(.payload.text // .payload.message.text // "message event")"'
+```console
+$ tundish subscribe channel --as reviewer --queue slack --start new --filter '.key == "slack:C123"' --template '"[\(.queue)#\(.id)] \(.payload.text // .payload.message.text // "message event")"'
+created channel
+bound reviewer to channel
+...
+
 ```
 
 Post a message in that channel, then pull it:
 
-```sh
-tundish pull channel --as reviewer
+```console
+$ tundish pull channel --as reviewer
 ```
 
 The default `on-read` rule marks the item delivered after printing.

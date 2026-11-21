@@ -12,8 +12,10 @@ and the subscriber name `reviewer`.
 
 ## Publish an item
 
-```sh
-tundish publish slack --key slack:C123 '{"text":"Review PR 42"}'
+```console
+$ tundish publish slack --key slack:C123 '{"text":"Review PR 42"}'
+1
+
 ```
 
 tundish prints an integer id. In a new database it prints `1`. If your id
@@ -21,14 +23,12 @@ differs, use it in the commands below. A queue needs no setup.
 
 ## Subscribe
 
-```sh
-tundish subscribe inbox --as reviewer --queue slack --consume on-ack
-```
-
-```text
+```console
+$ tundish subscribe inbox --as reviewer --queue slack --consume on-ack
 created inbox
 bound reviewer to inbox
 rules: {"queue":"slack","select":"since_last_read","consume":"on_ack","share":"all","lease":600,"max_attempts":3,"start":"all"}
+
 ```
 
 The subscription is `inbox`. It reads the queue `slack` for the subscriber
@@ -38,13 +38,11 @@ subscriber acks it.
 
 ## Pull the batch
 
-```sh
-tundish pull inbox --as reviewer
-```
-
-```text
+```console
+$ tundish pull inbox --as reviewer
 tundish: subscription=inbox subscriber=reviewer delivered=1 more=0 unacked=0 parked=0 errors=0 dropped=0 lease=0
 [slack#1] slack:C123 {"text":"Review PR 42"}
+
 ```
 
 The status line names the subscription and subscriber and reports one
@@ -56,27 +54,40 @@ line in the ack command below.
 
 When you take responsibility for the item, ack it:
 
-```sh
-tundish ack 1 --as reviewer --subscription inbox
-```
-
-```text
+```console
+$ tundish ack 1 --as reviewer --subscription inbox
 acked 1
+
 ```
 
 Read the full item and its ack:
 
-```sh
-tundish show 1
+```console
+$ tundish show 1
+{
+  "id": 1,
+  "queue": "slack",
+  "key": "slack:C123",
+  "payload": {
+    "text": "Review PR 42"
+  },
+  "created_at": 1767225600,
+  "acks": [
+    {
+      "subscription": "inbox",
+      "owner": "reviewer",
+      "at": 1767225600
+    }
+  ]
+}
+
 ```
 
-Pull again:
+Pull again. With no other items, this prints nothing:
 
-```sh
-tundish pull inbox --as reviewer
+```console
+$ tundish pull inbox --as reviewer
 ```
-
-With no other items, this prints nothing.
 
 ## Receive an item in an agent session
 
@@ -92,8 +103,10 @@ this tutorial; it has no delivery interval.
 
 Start the agent in that directory. In another terminal, publish an item:
 
-```sh
-tundish publish slack --key slack:C123 '{"text":"PR 43 is ready for review"}'
+```console
+$ tundish publish slack --key slack:C123 '{"text":"PR 43 is ready for review"}'
+2
+
 ```
 
 Ask the agent to run `pwd`. After the tool batch, gaff runs the handler

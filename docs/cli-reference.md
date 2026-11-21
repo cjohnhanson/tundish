@@ -6,22 +6,355 @@ type: reference
 
 # CLI reference
 
-## Global options
+The command sections are the `--help` output of the tundish binary, and a
+test fails when they differ from it. The sections after them describe the
+item, the subscription rules, the pull output, and the configuration file.
+
+<!-- Begin generated CLI help: cargo test --test docs -->
+
+## tundish
 
 ```text
-tundish <command>
+A local inbox that agents subscribe to
+
+Usage: tundish <COMMAND>
+
+Commands:
+  publish      Publish one JSON item to a queue; print its id
+  subscribe    Bind a subscriber to a subscription; with --queue, create or replace it
+  unsubscribe  Unbind a subscriber
+  pull         Print the next batch for a subscriber and mark it delivered
+  ack          Ack an item by id
+  show         Print one item as JSON
+  list         List queues, or the items in one queue
+  status       Print every subscription and subscriber position
+  check        Check the config and every subscription's expressions
+  prime        Print what tundish is and how to use it, for an agent's context
+  docs         Read the bundled documentation
+  help         Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help
+          Print help (see a summary with '-h')
+
+  -V, --version
+          Print version
+
+Exit codes:
+  0  Success, including a pull with nothing to print
+  1  An error: invalid JSON, an expression error, a database or I/O error,
+     a missed deadline, or a failed docs request
+  2  A usage error: bad arguments, config, names, or rule values; an unknown
+     subscription; a missing binding; a missing item
+  3  An ack met another subscriber's ack or live lease
 ```
 
-| Option | Default | Meaning |
-| --- | --- | --- |
-| `-h`, `--help` | | Print help. Each command also accepts these flags. |
-| `-V`, `--version` | | Print the version. |
+## tundish publish
 
-tundish uses one database per user. The `database:` setting in
-`~/.config/tundish/config.yml` selects its path. The default is
-`~/.local/state/tundish/tundish.db`. If the config file is absent, every
-default applies. Home comes from the passwd database. `HOME` and XDG
-environment variables do not change these paths. The config path is fixed.
+```text
+Publish one JSON item to a queue; print its id
+
+The insert and the queue's retention trim commit in one transaction. Reusing a key adds another
+item; it does not replace or deduplicate.
+
+Usage: tundish publish [OPTIONS] <QUEUE> [JSON]
+
+Arguments:
+  <QUEUE>
+          The queue; it needs no setup, and the name cannot be empty
+
+  [JSON]
+          The item, any JSON value; read from stdin when omitted
+
+Options:
+      --key <KEY>
+          A label to filter on, such as `slack:C123`
+
+  -h, --help
+          Print help (see a summary with '-h')
+```
+
+## tundish subscribe
+
+```text
+Bind a subscriber to a subscription; with --queue, create or replace it
+
+With --queue, creates the subscription or replaces all its rules; a rule flag left out takes its
+default. Without --queue, binds the subscriber to an existing subscription and changes no rule. Run
+it with only --as to print the stored rules.
+
+Prints, in order: `created <name>`, `replaced the rules of <name>`, or `moved <name> from <queue>;
+...` when --queue changed something; `bound <subscriber> to <name>` when this call made the binding;
+and always `rules: <the stored rules as JSON>`.
+
+Moving a subscription to another queue resets its positions and removes its acks and leases.
+
+Usage: tundish subscribe [OPTIONS] --as <SUBSCRIBER> <NAME>
+
+Arguments:
+  <NAME>
+          The subscription: 1 to 64 of A-Z a-z 0-9 . _ : -
+
+Options:
+      --as <SUBSCRIBER>
+          The subscriber: a stable name, such as an agent's role
+
+      --queue <QUEUE>
+          Create or replace the subscription on this queue
+
+      --filter <FILTER>
+          A jaq expression per item; the item matches when any output is truthy [default: every item
+          matches]
+
+      --select <SELECT>
+          Which unseen items a pull takes; `latest` needs --limit and refuses --share one [default:
+          since-last-read]
+
+          Possible values:
+          - since-last-read: Every unseen item, oldest first
+          - latest:          The newest unseen items up to --limit; older unseen items are skipped
+
+      --limit <LIMIT>
+          The most items one pull delivers, at least 1 [default: no limit]
+
+      --consume <CONSUME>
+          When an item counts as done [default: on-read]
+
+          Possible values:
+          - on-read: Delivery is enough
+          - on-ack:  An item stays open until a subscriber acks it
+
+      --share <SHARE>
+          Who gets an item [default: all]
+
+          Possible values:
+          - all: Every subscriber gets every item
+          - one: Each item goes to one subscriber
+
+      --every <EVERY>
+          Minimum time between deliveries for `pull --due`: 90, 30s, 10m, 2h, 1d [default: none]
+
+      --template <TEMPLATE>
+          A jaq expression per item that yields the printed text [default: `[queue#id] key payload`]
+
+      --lease <LEASE>
+          How long a lease holds under --share one and --consume on-ack [default: 600s]
+
+      --max-attempts <MAX_ATTEMPTS>
+          Leases before an item is parked, at least 1 [default: 3]
+
+      --start <START>
+          Where a new subscriber starts [default: all]
+
+          Possible values:
+          - all: Every item still kept
+          - new: Only items published after the subscriber joins
+
+  -h, --help
+          Print help (see a summary with '-h')
+```
+
+## tundish unsubscribe
+
+```text
+Unbind a subscriber
+
+Removes the binding and its read position; the subscription stays, even with no subscriber left. An
+absent binding exits 2.
+
+Usage: tundish unsubscribe --as <SUBSCRIBER> <NAME>
+
+Arguments:
+  <NAME>
+          The subscription
+
+Options:
+      --as <SUBSCRIBER>
+          The subscriber to unbind
+
+  -h, --help
+          Print help (see a summary with '-h')
+```
+
+## tundish pull
+
+```text
+Print the next batch for a subscriber and mark it delivered
+
+Each subscription that prints anything starts with a status line, then one line per item. The batch
+prints and flushes before the delivery commits, so a failure in between can repeat items on the next
+pull. When GAFF_TIMEOUT_MS holds a number of milliseconds and that deadline passes before the
+commit, the pull rolls back and exits 1.
+
+Usage: tundish pull [OPTIONS] --as <SUBSCRIBER> [NAME]
+
+Arguments:
+  [NAME]
+          The subscription; omit with --due
+
+Options:
+      --due
+          Pull every subscription of this subscriber whose `every` window has passed
+
+      --as <SUBSCRIBER>
+          The subscriber pulling
+
+      --max-bytes <MAX_BYTES>
+          The byte budget for the printed batch, at least 400
+          
+          [default: 1024]
+
+  -h, --help
+          Print help (see a summary with '-h')
+```
+
+## tundish ack
+
+```text
+Ack an item by id
+
+Prints `acked <id>` for the first ack in the subscription and for a repeat by the same subscriber.
+Prints `already acked by <owner> at <unix time>` or `leased by <owner> until <unix time>` and exits
+3 when another subscriber holds the item. An ack removes the lease.
+
+Usage: tundish ack [OPTIONS] --as <SUBSCRIBER> <ID>
+
+Arguments:
+  <ID>
+          The item id, from `[queue#id]` in a pull
+
+Options:
+      --as <SUBSCRIBER>
+          The subscriber that takes the item
+
+      --subscription <SUBSCRIPTION>
+          The subscription to ack in; needed when the subscriber holds more than one on the item's
+          queue
+
+  -h, --help
+          Print help (see a summary with '-h')
+```
+
+## tundish show
+
+```text
+Print one item as JSON
+
+Prints the item as indented JSON, with an `acks` array when any subscription has acked it. A missing
+item exits 2.
+
+Usage: tundish show <ID>
+
+Arguments:
+  <ID>
+          The item id
+
+Options:
+  -h, --help
+          Print help (see a summary with '-h')
+```
+
+## tundish list
+
+```text
+List queues, or the items in one queue
+
+Without a queue, prints each queue that holds items and its item count, separated by a tab. With a
+queue, prints one JSON item per line, the newest N oldest first. Listing moves no position.
+
+Usage: tundish list [OPTIONS] [QUEUE]
+
+Arguments:
+  [QUEUE]
+          The queue whose items to print
+
+Options:
+      --unacked
+          Only items no subscription has acked, or with --subscription, items that subscription has
+          not acked
+
+      --subscription <SUBSCRIPTION>
+          With --unacked, the subscription whose acks count
+
+      --limit <LIMIT>
+          The newest N items; `--limit=-1` prints every item
+          
+          [default: 50]
+
+  -h, --help
+          Print help (see a summary with '-h')
+```
+
+## tundish status
+
+```text
+Print every subscription and subscriber position
+
+Prints one tab-separated line per binding, by subscription then subscriber: `<subscription>
+<subscriber> queue= cursor= unread= next_at= dropped= errors= parked= last_error=`. `last_error` is
+the most recent filter error as a JSON string, or empty.
+
+Usage: tundish status
+
+Options:
+  -h, --help
+          Print help (see a summary with '-h')
+```
+
+## tundish check
+
+```text
+Check the config and every subscription's expressions
+
+Prints `ok`, or names the first subscription whose rules fail and exits 2.
+
+Usage: tundish check
+
+Options:
+  -h, --help
+          Print help (see a summary with '-h')
+```
+
+## tundish prime
+
+```text
+Print what tundish is and how to use it, for an agent's context
+
+The text depends only on the binary; it opens no database and reads no config.
+
+Usage: tundish prime
+
+Options:
+  -h, --help
+          Print help (see a summary with '-h')
+```
+
+## tundish docs
+
+```text
+Read the bundled documentation
+
+Without a topic, lists the pages. An unknown topic, a search with no query, or a search with no
+match exits 1.
+
+Usage: tundish docs [OPTIONS] [TOPIC] [QUERY]
+
+Arguments:
+  [TOPIC]
+          Topic slug to show, or "search" to search the docs
+
+  [QUERY]
+          Search query (when topic is "search")
+
+Options:
+  -a, --all
+          Print every page whole, in one stream
+
+  -h, --help
+          Print help (see a summary with '-h')
+```
+
+<!-- End generated CLI help -->
 
 ## Item
 
@@ -37,37 +370,10 @@ Filters and templates receive this object. `show` and `list` also include
 an `acks` array when at least one subscription has acked the item. Each
 entry has `subscription`, `owner`, and `at` in Unix seconds.
 
-## publish
-
-```text
-tundish publish <queue> [--key <k>] [<json>]
-```
-
-Publishes one item and prints its id. Without `<json>`, it reads JSON from
-stdin. The queue name must be nonempty. The payload can be any JSON value.
-`--key` sets an optional label. Reusing a key adds another item; it does
-not replace or deduplicate items.
-
-The insert and the queue's retention trim commit in one transaction.
-
-## subscribe
-
-```text
-tundish subscribe <name> --as <subscriber> [--queue <q>] [<rule flags>]
-```
-
-With `--queue`, creates or replaces the named subscription and binds the
-subscriber to it. Omitted rule flags take their defaults, including when
-replacing a subscription. Without `--queue`, binds the subscriber to an
-existing subscription. Rule flags require `--queue`.
+## Subscription rules
 
 Subscription and subscriber names must contain 1 to 64 characters from
-`A-Z a-z 0-9 . _ : -`. An invalid name exits 2. For example,
-`tundish subscribe 'in box' --as reviewer --queue slack` prints:
-
-```text
-tundish: a subscription name is 1 to 64 of A-Z a-z 0-9 . _ : -, not "in box"
-```
+`A-Z a-z 0-9 . _ : -`. An invalid name exits 2.
 
 A subscriber is a stable name, such as `reviewer`. Repeating the binding
 keeps its position. Replacing rules on the same queue keeps existing
@@ -76,40 +382,10 @@ position, even if they now match. This applies to both share modes.
 Changing from `share one` to `share all` clears leases and carries the
 position to the subscribers. Changing to `share one` starts from the
 lowest subscriber position.
-Moving the subscription to another queue resets its positions and removes
-its acks and leases.
-
-The command prints up to three lines, in this order:
-
-| When | Output |
-| --- | --- |
-| `--queue` creates a subscription | `created <name>` |
-| `--queue` replaces rules on the same queue | `replaced the rules of <name>` |
-| `--queue` moves the subscription to another queue | `moved <name> from <old queue>; its positions, acks, and leases were reset` |
-| This call binds the subscriber | `bound <subscriber> to <name>` |
-| Always | `rules: <the stored rules as compact JSON>` |
-
-Without `--queue`, no creation, replacement, or move line prints. An
-existing binding prints no `bound` line. Run
-`tundish subscribe <name> --as <subscriber>` with no other flags to read
-the stored rules. If the subscriber is already bound, only `rules:` prints.
 
 jaq evaluates jq expressions over JSON. Filters and templates see the
 item object, including `.payload`. In a filter, `false` and `null` are
 false; all other values are truthy.
-
-| Rule flag | Default | Meaning |
-| --- | --- | --- |
-| `--filter <jaq>` | Match every item | Evaluate per item. Any truthy output makes it match. |
-| `--select since-last-read\|latest` | `since-last-read` | Select unseen matching items. `latest` needs `--limit` and refuses `--share one`. |
-| `--limit N` | No item limit | Maximum items per pull of this subscription. At least 1. |
-| `--consume on-read\|on-ack` | `on-read` | Count delivery as done, or require an ack. |
-| `--share all\|one` | `all` | Deliver to every subscriber, or share items among subscribers. |
-| `--every <duration>` | No interval | Interval for [due pulls](#due-pulls), per subscriber. |
-| `--template <jaq>` | `[queue#id] key payload-json` | Render each item. The default omits the key when absent. |
-| `--lease <duration>` | `600s` | Lease duration for `share one` with `on-ack`. |
-| `--max-attempts N` | `3` | Maximum leases before parking an item. Must be positive. |
-| `--start all\|new` | `all` | Start with all retained items, or only future items. Applies to each new subscriber under `share all` and the initial subscription position under `share one`. |
 
 Durations are positive integers with an optional unit: `90`, `30s`,
 `10m`, `2h`, or `1d`. A bare integer means seconds.
@@ -137,7 +413,7 @@ output prints as-is. If a template fails, the default item form prints
 with ` (template error: <error>)` appended. Template errors do not raise
 `errors=`. An empty result uses the default form.
 
-### Delivery rules
+## Delivery rules
 
 | Share | Consume | Result after a successful pull |
 | --- | --- | --- |
@@ -165,50 +441,19 @@ available through `show` and `list` until retention removes them.
 Acks and leases belong to a subscription. Subscriptions on the same queue
 do not share a claim.
 
-## unsubscribe
+Under `share all`, a subscriber that unsubscribes and subscribes again
+starts a new position under the subscription's `start` rule. Under
+`share one`, the subscription keeps its position.
 
-```text
-tundish unsubscribe <name> --as <subscriber>
-```
-
-Removes the subscriber's binding and position. The subscription remains,
-even after its last subscriber leaves. Prints
-`unbound <subscriber> from <name>; its read position was removed` and
-exits 0. Under `share all`, a later `subscribe` starts a new position
-under the subscription's `start` rule. Under `share one`, the subscription
-keeps its position. An absent binding exits 2.
-
-## pull
-
-```text
-tundish pull <name> --as <subscriber> [--max-bytes N]
-tundish pull --due --as <subscriber> [--max-bytes N]
-```
-
-`--as` is required. A named pull reads one subscription and ignores its
-`--every` interval. See [Due pulls](#due-pulls) for `--due`. The name and
-`--due` are mutually exclusive.
-
-`--max-bytes` defaults to 1024 and must be at least 400. A smaller value
-exits 2 with `tundish: --max-bytes must be at least 400`.
-
-A pull prints and flushes the batch before committing delivery. A
-failure before commit leaves delivery uncommitted. The next pull can
-repeat printed items. Delivery is at least once.
-
-Earlier unacked items alone do not cause output. The `unacked=` count is
-set only when the pull delivers items; otherwise it is 0. The `parked=`, `errors=`, and
-`dropped=` counts print once, even without items. The pull that reports
-them resets them. These rules apply to both named and due pulls.
-
-### Due pulls
+## Due pulls
 
 `pull --due --as <s>` visits the subscriber's due subscriptions in order
 of `next_at`, then name. A subscription is due when `next_at` is no later
 than the current time. After a delivery, `next_at` is the last delivery
 time plus `--every`, using zero seconds when no interval is set. A named
-pull also updates this time when it delivers an item. An empty pull or
-a pull that prints only a status line does not move `next_at`.
+pull ignores `--every`, and also updates this time when it delivers an
+item. An empty pull or a pull that prints only a status line does not
+move `next_at`.
 
 A due pull uses one transaction and one byte budget across all
 subscriptions. It commits all delivery changes or none. Each subscription
@@ -236,7 +481,7 @@ tundish: <who> holds no subscription, so nothing can be due: tundish subscribe <
 
 See the [gaff guide](how-to-gaff.md) for an interval used with a hook.
 
-### Byte budget and status line
+## Byte budget and status line
 
 Each subscription that prints anything starts with one status line,
 followed by its item lines. The fields appear in this order:
@@ -257,92 +502,16 @@ tundish: subscription=<name> subscriber=<subscriber> delivered=<N> more=<0|1> un
 | `dropped` | Unread matching items removed by retention since the last report. Includes items trimmed under an open lease in `share one`. |
 | `lease` | Seconds the lease holds for a `share one`, `on-ack` batch with delivered items; otherwise 0. |
 
+Earlier unacked items alone do not cause output. The `parked=`,
+`errors=`, and `dropped=` counts print once, even without items. The pull
+that reports them resets them.
+
 Each subscription stops at its item limit, the byte budget, or the scan
 limit. Later items that do not fit wait for another pull under
 `since-last-read`. See [Due pulls](#due-pulls) for budget allocation and
 truncation.
 
-The ack command is documented by `tundish prime`
-and the [tundish skill](https://github.com/cjohnhanson/tundish/blob/main/skills/tundish/SKILL.md). It takes the item id
-from `[queue#id]` and the names from the status line. Inspect unacked items
-with `tundish list <queue> --unacked --subscription <s>`. Inspect filter
-error text with `tundish status`.
-
-### Handler deadline
-
-When `GAFF_TIMEOUT_MS` contains an unsigned integer, tundish uses it as
-a deadline in milliseconds. It reserves one quarter of that time, up to
-100 ms, for exit and flush. If the deadline passes before commit, the
-pull rolls back and exits 1. gaff discards the failed handler's output.
-
-## ack
-
-```text
-tundish ack <id> --as <subscriber> [--subscription <name>]
-```
-
-`--as` is required. `--subscription` is required only when the subscriber
-holds more than one subscription on the item's queue. An explicit
-subscription must be bound to that subscriber and read the item's queue.
-
-| Result | Output | Exit |
-| --- | --- | --- |
-| First ack in the subscription | `acked <id>` | 0 |
-| Repeat ack by the owner | `acked <id>` | 0 |
-| Another subscriber already acked it | `already acked by <owner> at <unix time>` | 3 |
-| Another subscriber holds a live lease | `leased by <owner> until <unix time>` | 3 |
-
-An ack removes the lease. Exit 2 covers a missing item, an ambiguous
-subscription, or a subscriber with no subscription on the item's queue.
-It also covers an explicit `--subscription` that the subscriber does not
-hold or that reads another queue.
-
-## show
-
-```text
-tundish show <id>
-```
-
-Prints the full item as formatted JSON, with each subscription's ack.
-A missing item exits 2.
-
-## list
-
-```text
-tundish list [<queue>] [--unacked [--subscription <name>]] [--limit N]
-```
-
-Without a queue, prints queue names and item counts separated by a tab,
-in queue name order. Only queues with retained items appear.
-
-With a queue, prints one JSON item per line. `--limit` defaults to 50.
-It selects the newest N items and prints them oldest first. A limit of
-0 prints no items. `--limit=-1` removes the limit; `--limit -1` is a
-usage error.
-
-`--unacked` selects items with no ack in any subscription. With
-`--subscription`, it selects items with no ack in that subscription.
-`--subscription` requires `--unacked`. These options and `--limit` only
-affect output when a queue is named. Listing does not change a position.
-
-## status
-
-```text
-tundish status
-```
-
-Prints one tab-separated line per subscription and subscriber binding,
-ordered by subscription then subscriber:
-
-```text
-<subscription>	<subscriber>	queue=<q>	cursor=<n>	unread=<n>	next_at=<t>	dropped=<n>	errors=<n>	parked=<n>	last_error=<json string or empty>
-```
-
-For example:
-
-```text
-inbox	reviewer	queue=slack	cursor=1	unread=0	next_at=1002	dropped=0	errors=0	parked=0	last_error=
-```
+## Status fields
 
 `cursor=` shows the subscriber's position under `share all` and the
 subscription's position under `share one`. With `share all`, `unread=`
@@ -355,56 +524,12 @@ a retry. Live leases and parked items do not add to that count.
 yet reported in a pull. For `share one`, it includes items trimmed under
 an open lease. `errors=` counts filter failures not yet reported in a
 pull. `parked=` counts parked items, including those already reported.
-`last_error` keeps the most recent filter error as a JSON string, or is
-empty if none has occurred. Reporting errors in a pull resets their
-count but never resets `last_error`.
-
-## check
-
-```text
-tundish check
-```
-
-Validates the config and every subscription's rules and expressions.
-Prints `ok` on success.
-
-## prime
-
-```text
-tundish prime
-```
-
-Prints a short description and command examples for an agent's context.
-The output depends only on the binary version. It does not open the
-database or load the config.
-
-The ack command in its output is:
-
-```text
-tundish ack <id> --as <subscriber> [--subscription <s>]
-```
-
-## docs
-
-```text
-tundish docs [topic]
-tundish docs list
-tundish docs search <query>
-tundish docs --all
-```
-
-Without a topic, or with `list`, prints the bundled page listing. A topic
-is a filename without `.md`, such as `getting-started`. `search` searches
-the pages. `-a` or `--all` prints every page and cannot accompany a topic
-or query. This command does not open the database or load the config.
-An unknown topic, missing search query, or search with no matches exits 1.
+Reporting errors in a pull resets their count but never resets
+`last_error`.
 
 ## Package commands
 
-`tundish help [command]` prints help for the command or the main command
-listing.
-
-These package commands are hidden from the main help:
+These commands are hidden from the main help:
 
 | Command | Meaning |
 | --- | --- |
@@ -414,8 +539,10 @@ These package commands are hidden from the main help:
 ## Configuration
 
 The config file is `~/.config/tundish/config.yml`. Home comes from the
-passwd database. Publishers, the gaff handler, and the agent use the same
-database because they read this file as the same user.
+passwd database; `HOME` and XDG variables do not change the path.
+Publishers, the gaff handler, and the agent use the same database because
+they read this file as the same user. If the file is absent, every default
+applies.
 
 ```yaml
 format: 1
@@ -456,16 +583,3 @@ position or lease. Unread matching items removed by retention contribute
 to `dropped=` in the status line. For `share one`, an item trimmed under
 an open lease also counts. The count stays pending until a pull reports
 it once.
-
-## Exit codes
-
-| Code | Meaning |
-| --- | --- |
-| 0 | Success, including a pull with no output when the subscriber is bound. |
-| 1 | Error, including invalid JSON, expression errors, I/O or database errors, a missed deadline, or a failed docs request. |
-| 2 | Usage error, invalid config, names or rule values, unknown subscription, missing binding (including `pull --due` for a subscriber with no subscriptions), or missing item for `show` or `ack`. |
-| 3 | An ack met another subscriber's ack or live lease. |
-
-For a missing binding, the message names
-`tundish subscribe <name> --as <subscriber>`. For an unknown subscription,
-the message is `no subscription named <name>`.
