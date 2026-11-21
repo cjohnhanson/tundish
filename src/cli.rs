@@ -38,7 +38,7 @@ Exit codes:
      failed docs request
   2  A usage error: bad arguments, config, names, or rule values; a rule
      that fails `check`; an unknown subscription in subscribe, pull, or ack;
-     a missing binding; a missing item
+     a missing binding; a missing item; a database from a newer tundish
   3  An ack met another subscriber's ack or live lease";
 
 #[derive(Parser)]
@@ -68,9 +68,10 @@ pub struct Args {
 enum Command {
     /// Publish one JSON item to a queue; print its id
     ///
-    /// Publishing also applies the queue's retention limits from the
-    /// config, in the same transaction. Reusing a key adds another item; it
-    /// does not replace or deduplicate.
+    /// Publishing also applies the queue's retention limits, in the same
+    /// transaction: the limits the config sets for the queue, or 10000 items
+    /// for a queue the config does not name. Reusing a key adds another
+    /// item; it does not replace or deduplicate.
     // Store::publish, src/store.rs: the empty-queue refusal and the trim.
     Publish {
         /// The queue; it needs no setup, and the name cannot be empty
@@ -89,13 +90,18 @@ enum Command {
     /// and changes no rule. For a subscriber already bound, that prints
     /// only the stored rules.
     ///
-    /// Prints up to three lines, in this order:
+    /// Prints up to three lines, in this order. First, when --queue is
+    /// given, one of:
     ///
-    ///   created <name>                  --queue made a new subscription
-    ///   replaced the rules of <name>    --queue named the same queue
-    ///   moved <name> from <queue>; ...  --queue named another queue
-    ///   bound <subscriber> to <name>    this call made the binding
-    ///   rules: <the stored rules>       always, as JSON
+    /// - `created <name>`, for a new subscription
+    ///
+    /// - `replaced the rules of <name>`, when --queue names its queue
+    ///
+    /// - `moved <name> from <queue>; its positions, acks, and leases were
+    ///   reset`, when --queue names another queue
+    ///
+    /// Then `bound <subscriber> to <name>` when this call made the binding,
+    /// and last, always, `rules: <the stored rules as JSON>`.
     ///
     /// Moving a subscription to another queue resets its positions and
     /// removes its acks and leases.
@@ -164,8 +170,8 @@ enum Command {
     ///
     /// Without a queue, prints each queue that holds items and its item
     /// count, separated by a tab; the other options then change nothing.
-    /// With a queue, prints one JSON item per line, the newest N oldest
-    /// first. Listing moves no position.
+    /// With a queue, prints one JSON item per line: the newest --limit
+    /// items, in order from oldest to newest. Listing moves no position.
     // Store::queues and Store::list, src/store.rs.
     List {
         /// The queue whose items to print
@@ -262,9 +268,9 @@ struct SubscribeArgs {
     /// Leases before an item is parked, at least 1 [default: 3]
     #[arg(long, requires = "queue")]
     max_attempts: Option<i64>,
-    /// Where reading starts: for each new subscriber under --share all, and
-    /// for the subscription's one shared position, set when --queue creates
-    /// or moves it, under --share one [default: all]
+    /// Where reading starts [default: all]. Under --share all, it applies to
+    /// each new subscriber. Under --share one, it sets the shared position
+    /// when --queue creates or moves the subscription
     #[arg(long, value_enum, requires = "queue")]
     start: Option<StartArg>,
 }
@@ -311,7 +317,7 @@ enum ShareArg {
 enum StartArg {
     /// Every item still retained
     All,
-    /// Only items published after that point
+    /// Only items published after the start is set
     New,
 }
 

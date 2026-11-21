@@ -197,7 +197,8 @@ fn commands(page: &Path, text: &str) -> std::collections::BTreeSet<String> {
             if let Some(word) = cmd.split_whitespace().find(|w| !w.contains('=')) {
                 names.insert(word.to_string());
             }
-        } else {
+        } else if !line.starts_with("> ") {
+            // `> ` continues a command; every other line is output.
             assert!(
                 !line.contains('\\'),
                 "{}: trycmd cannot match output holding a backslash; choose an example without one: {line}",

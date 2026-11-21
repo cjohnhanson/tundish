@@ -94,7 +94,8 @@ record. The `cwd_prefix` condition does not grant trust.
 
 ## Check delivery
 
-Publish an item from another terminal:
+Publish an item from another terminal. The output below comes from a
+database that held no items; in yours, the id and counts can differ:
 
 ```console
 $ tundish publish slack --key slack:C123 '{"text":"Review PR 42"}'

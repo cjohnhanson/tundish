@@ -47,7 +47,7 @@ Exit codes:
      failed docs request
   2  A usage error: bad arguments, config, names, or rule values; a rule
      that fails `check`; an unknown subscription in subscribe, pull, or ack;
-     a missing binding; a missing item
+     a missing binding; a missing item; a database from a newer tundish
   3  An ack met another subscriber's ack or live lease
 ```
 
@@ -56,8 +56,9 @@ Exit codes:
 ```text
 Publish one JSON item to a queue; print its id
 
-Publishing also applies the queue's retention limits from the config, in the same transaction.
-Reusing a key adds another item; it does not replace or deduplicate.
+Publishing also applies the queue's retention limits, in the same transaction: the limits the config
+sets for the queue, or 10000 items for a queue the config does not name. Reusing a key adds another
+item; it does not replace or deduplicate.
 
 Usage: tundish publish [OPTIONS] <QUEUE> [JSON]
 
@@ -85,11 +86,17 @@ With --queue, creates the subscription or replaces all its rules; a rule flag le
 default. Rule flags need --queue. Without --queue, binds the subscriber to an existing subscription
 and changes no rule. For a subscriber already bound, that prints only the stored rules.
 
-Prints up to three lines, in this order:
+Prints up to three lines, in this order. First, when --queue is given, one of:
 
-created <name>                  --queue made a new subscription replaced the rules of <name>
---queue named the same queue moved <name> from <queue>; ...  --queue named another queue bound
-<subscriber> to <name>    this call made the binding rules: <the stored rules>       always, as JSON
+- `created <name>`, for a new subscription
+
+- `replaced the rules of <name>`, when --queue names its queue
+
+- `moved <name> from <queue>; its positions, acks, and leases were reset`, when --queue names
+another queue
+
+Then `bound <subscriber> to <name>` when this call made the binding, and last, always, `rules: <the
+stored rules as JSON>`.
 
 Moving a subscription to another queue resets its positions and removes its acks and leases.
 
@@ -149,13 +156,13 @@ Options:
           Leases before an item is parked, at least 1 [default: 3]
 
       --start <START>
-          Where reading starts: for each new subscriber under --share all, and for the
-          subscription's one shared position, set when --queue creates or moves it, under --share
-          one [default: all]
+          Where reading starts [default: all]. Under --share all, it applies to each new subscriber.
+          Under --share one, it sets the shared position when --queue creates or moves the
+          subscription
 
           Possible values:
           - all: Every item still retained
-          - new: Only items published after that point
+          - new: Only items published after the start is set
 
   -h, --help
           Print help (see a summary with '-h')
@@ -275,8 +282,8 @@ Options:
 List queues, or the items in one queue
 
 Without a queue, prints each queue that holds items and its item count, separated by a tab; the
-other options then change nothing. With a queue, prints one JSON item per line, the newest N oldest
-first. Listing moves no position.
+other options then change nothing. With a queue, prints one JSON item per line: the newest --limit
+items, in order from oldest to newest. Listing moves no position.
 
 Usage: tundish list [OPTIONS] [QUEUE]
 

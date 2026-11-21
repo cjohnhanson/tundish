@@ -70,8 +70,9 @@ acks and competing acks, inspection commands, and delivery intervals.
 The merge gate requires at least one passing path and no failures.
 CI sets `MISSOURI_SANDBOX=preinstalled` for this suite.
 
-The docs are tests. `tests/docs.rs` runs every `console` block in
-README.md and docs/*.md against the built binary. Each page runs in a
+The docs are tests. `tests/docs.rs` runs every block of README.md and
+docs/*.md that trycmd runs (`console`, `trycmd`, and fences with no
+language) against the built binary. Each page runs in a
 scratch directory with its own database and a fixed clock. The test also
 checks that the command sections of docs/cli-reference.md equal the
 binary's `--help` output. Change a command's help in its doc comment in
