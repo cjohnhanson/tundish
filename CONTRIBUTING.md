@@ -45,11 +45,12 @@ Open a GitHub issue first. A small fix needs none.
 For an outside contribution, open the pull request and stop there. The
 maintainer records the required sign-off note on its head commit.
 
-Three workflows check a change, and `release.yml` publishes a tag.
+Four workflows check a change, and `release.yml` publishes a tag.
 `verify` runs on every push. `gate` runs on pull requests and invokes
 the local gates through `gaff ci`. `review-gate` checks the pull request's
 sign-off note under the base branch's policy. It reads no code from the
-pull request, so the branch cannot weaken that policy for itself.
+pull request, so the branch cannot weaken that policy for itself. `docs`
+runs the docs checks described under "The docs are tests".
 
 The local commit gate checks formatting and clippy. It first refuses
 unstaged Rust changes, so the checked files match the index. The merge
@@ -86,11 +87,25 @@ SNAPSHOTS=overwrite cargo test --test docs
 
 In README.md and docs/*.md, put every tundish command in a `console`
 block, except under Install. A `sh`, `text`, or other tagged block never
-runs. Give every fence a language: trycmd runs a fence with none. The
-`docs` workflow runs the family docs checks from the diataxis repository
-on every pull request: it fails a command outside a `console` block, a
-fence with no language, a README that leaves the family shape, a broken
-internal link, and a misspelling.
+runs. Give every fence a language: trycmd runs a fence with none.
+
+The `docs` workflow calls `.github/workflows/family-checks.yml` in the
+diataxis repository, which every tool of the eng.rip family (tundish,
+gaff, tisket, zettel, almanac, diataxis, missouri) shares. It reads
+README.md and docs/, and fails when:
+
+- a command of any of those tools sits outside a `console` block, except
+  under Install;
+- a fence has no language, or is a `trycmd` fence;
+- the README does not open with `# tundish`, has no paragraph before its
+  first section, has no `## Install` section, or does not end with
+  `## License`;
+- a link to a file or heading in the repository is broken (a push to
+  `main` checks web links too);
+- typos finds a misspelling.
+
+The scripts and their rules are in the diataxis repository under
+`scripts/family/`; each one prints its rules with `--help`.
 
 The merge gate checks that every required sign-off has vendored criteria
 and that every vendored criterion is required. `.gaff/gaff.yml`
