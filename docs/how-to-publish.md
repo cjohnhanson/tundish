@@ -105,18 +105,28 @@ the short `tundish pull` command.
 
 ## Pull one channel
 
-Replace `C123` with your channel id:
+Replace `C123` with your channel id. The output below leaves out the
+`rules:` line, which repeats both expressions:
 
-```sh
-tundish subscribe channel --as reviewer --queue slack --start new \
-  --filter '.key == "slack:C123"' \
-  --template '"[\(.queue)#\(.id)] \(.payload.text // .payload.message.text // "message event")"'
+```console
+$ tundish subscribe channel --as reviewer --queue slack --start new --filter '.key == "slack:C123"' --template '"[\(.queue)#\(.id)] \(.payload.text // .payload.message.text // "message event")"'
+created channel
+bound reviewer to channel
+...
+
 ```
 
-Post a message in that channel, then pull it:
+Post a message in that channel, then pull it. Without Slack, publish an
+event of the same shape in its place:
 
-```sh
-tundish pull channel --as reviewer
+```console
+$ tundish publish slack --key slack:C123 '{"channel":"C123","text":"Deploy finished"}'
+1
+
+$ tundish pull channel --as reviewer
+tundish: subscription=channel subscriber=reviewer delivered=1 more=0 unacked=0 parked=0 errors=0 dropped=0 lease=0
+[slack#1] Deploy finished
+
 ```
 
 The default `on-read` rule marks the item delivered after printing.
