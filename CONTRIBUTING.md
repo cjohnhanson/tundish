@@ -98,7 +98,8 @@ README.md and docs/, and fails when:
   under Install;
 - a fence has no language, or is a `trycmd` fence;
 - the README does not open with `# tundish`, has no paragraph before its
-  first section, has no `## Install` section, or does not end with
+  first section, has no `## Install` or `## Installation` section, or
+  does not end with
   `## License`;
 - a link to a file or heading in the repository is broken (a push to
   `main` checks web links too);

@@ -7,7 +7,7 @@ type: tutorial
 # Getting started with tundish
 
 Install tundish with one of the commands in the
-[README](https://github.com/cjohnhanson/tundish#install). The examples use the default database
+[README](https://github.com/cjohnhanson/tundish#installation). The examples use the default database
 and the subscriber name `reviewer`.
 
 ## Publish an item
