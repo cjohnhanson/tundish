@@ -86,8 +86,9 @@ SNAPSHOTS=overwrite cargo test --test docs
 ```
 
 In README.md and docs/*.md, put every tundish command in a `console`
-block, except under Install. A `sh`, `text`, or other tagged block never
-runs. Give every fence a language: trycmd runs a fence with none.
+block, except under Install or Installation. A `sh`, `text`, or other
+tagged block never runs. Give every fence a language: trycmd runs a fence
+with none.
 
 The `docs` workflow calls `.github/workflows/family-checks.yml` in the
 diataxis repository, which every tool of the eng.rip family (tundish,
@@ -95,11 +96,11 @@ gaff, tisket, zettel, almanac, diataxis, missouri) shares. It reads
 README.md and docs/, and fails when:
 
 - a command of any of those tools sits outside a `console` block, except
-  under Install;
+  under Install or Installation;
 - a fence has no language, or is a `trycmd` fence;
 - the README does not open with `# tundish`, has no paragraph before its
-  first section, has no `## Install` section, or does not end with
-  `## License`;
+  first section, has no `## Install` or `## Installation` section, or
+  does not end with `## License`;
 - a link to a file or heading in the repository is broken (a push to
   `main` checks web links too);
 - typos finds a misspelling.
