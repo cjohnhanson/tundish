@@ -86,7 +86,11 @@ SNAPSHOTS=overwrite cargo test --test docs
 
 In README.md and docs/*.md, put every tundish command in a `console`
 block, except under Install. A `sh`, `text`, or other tagged block never
-runs. Give every fence a language: trycmd runs a fence with none.
+runs. Give every fence a language: trycmd runs a fence with none. The
+`docs` workflow runs the family docs checks from the diataxis repository
+on every pull request: it fails a command outside a `console` block, a
+fence with no language, a README that leaves the family shape, a broken
+internal link, and a misspelling.
 
 The merge gate checks that every required sign-off has vendored criteria
 and that every vendored criterion is required. `.gaff/gaff.yml`
