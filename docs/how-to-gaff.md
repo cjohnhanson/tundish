@@ -13,10 +13,9 @@ publisher, handler, and agent as the same user. They read
 
 ## Set a subscription interval
 
-Choose a stable subscriber name for the agent role. Set a five-minute
-interval for the `inbox` subscription:
-
-If `inbox` already reads `slack` and `reviewer` is already bound:
+Choose a stable subscriber name for the agent role, then set a
+five-minute interval for the `inbox` subscription. If `inbox` already
+reads `slack` and `reviewer` is already bound:
 
 ```console
 $ tundish subscribe inbox --as reviewer --queue slack --consume on-ack --every 5m

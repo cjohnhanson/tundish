@@ -15,7 +15,8 @@ library. `rust-toolchain.toml` selects the Rust toolchain. The
 interpreter and its development library. CI uses Python 3.12.
 
 Install `jq` and `uv` with your package manager. Install gaff for the
-merge-gate tests and missouri for the suite under `tests/missouri/`:
+merge-gate tests and the docs tests, and missouri for the suite under
+`tests/missouri/`:
 
 ```sh
 cargo install --locked --git https://github.com/cjohnhanson/missouri
@@ -70,20 +71,21 @@ The merge gate requires at least one passing path and no failures.
 CI sets `MISSOURI_SANDBOX=preinstalled` for this suite.
 
 The docs are tests. `tests/docs.rs` runs every `console` block in
-README.md and docs/*.md against the built binary, in a scratch directory
-with its own database and a fixed clock, and checks that the command
-sections of docs/cli-reference.md equal the binary's `--help` output.
-Change a command's help in its doc comment in `src/cli.rs`, never in the
-page. To write real output into the pages, run one of these, then read
-the diff:
+README.md and docs/*.md against the built binary. Each page runs in a
+scratch directory with its own database and a fixed clock. The test also
+checks that the command sections of docs/cli-reference.md equal the
+binary's `--help` output. Change a command's help in its doc comment in
+`src/cli.rs`, never in the page. To write real output into the pages, run
+one of these, then read the diff:
 
 ```sh
 TRYCMD=overwrite cargo test --test docs
 SNAPSHOTS=overwrite cargo test --test docs
 ```
 
-A command in any other fence is never run, so put every example command
-in a `console` block. Install commands are the exception.
+In README.md and docs/*.md, put every tundish command in a `console`
+block, except under Install. A `sh`, `text`, or other tagged block never
+runs. Give every fence a language: trycmd runs a fence with none.
 
 The merge gate checks that every required sign-off has vendored criteria
 and that every vendored criterion is required. `.gaff/gaff.yml`

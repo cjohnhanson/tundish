@@ -29,6 +29,9 @@ const BIN: &str = env!("CARGO_BIN_EXE_tundish");
 const NOW: i64 = 1_767_225_600;
 const BEGIN: &str = "<!-- Begin generated CLI help: cargo test --test docs -->";
 const END: &str = "<!-- End generated CLI help -->";
+/// clap wraps help to `COLUMNS` when no terminal is attached, so the
+/// width is fixed for every run.
+const COLUMNS: &str = "100";
 
 fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -103,8 +106,10 @@ fn run_page(scratch: &Path, wrapper: &Path, page: &Path) {
 
     let home_var = |sub: &str| home.join(sub).display().to_string();
     let cases = trycmd::TestCases::new();
-    // trycmd skips, and does not fail, a command it cannot resolve, so
-    // every command a page runs is registered here or the page fails.
+    // trycmd skips, and does not fail, a command it cannot resolve, and it
+    // resolves an unregistered crate binary to the binary without the
+    // wrapper. So every command a page runs is registered here, from the
+    // blocks trycmd runs, or the page fails.
     for name in commands(page, &format!("{setup}{body}")) {
         if name == "tundish" {
             cases.register_bin("tundish", wrapper);
@@ -125,6 +130,7 @@ fn run_page(scratch: &Path, wrapper: &Path, page: &Path) {
         .env("XDG_DATA_HOME", home_var(".local/share"))
         .env("NO_COLOR", "1")
         .env("TERM", "dumb")
+        .env("COLUMNS", COLUMNS)
         .case(&case)
         .run();
 
@@ -142,36 +148,51 @@ fn run_page(scratch: &Path, wrapper: &Path, page: &Path) {
     }
 }
 
-/// The lines inside the page's `console` blocks.
-fn console_lines(text: &str) -> Vec<&str> {
+/// The lines of every block trycmd runs, read by trycmd 1.2's own rules
+/// (`parse_trycmd` in its schema.rs): a fence with no info string, or
+/// one whose language is `console` or `trycmd`, runs; the block ends at
+/// the first line that starts with the opening backticks.
+///
+/// Panics on a `console,ignore` or `trycmd,ignore` block: trycmd skips
+/// it, so its commands would never be checked.
+fn run_lines<'a>(page: &Path, text: &'a str) -> Vec<&'a str> {
     let mut lines = Vec::new();
-    // The open fence: its backtick count and its info string.
-    let mut fence: Option<(usize, &str)> = None;
+    // The open fence: its backticks, and whether trycmd runs its body.
+    let mut fence: Option<(&str, bool)> = None;
     for line in text.lines() {
-        let ticks = line.len() - line.trim_start_matches('`').len();
-        if ticks >= 3 {
-            let info = line[ticks..].trim();
-            match fence {
-                None => fence = Some((ticks, info)),
-                Some((open, _)) if ticks >= open && info.is_empty() => fence = None,
-                Some(_) => {}
+        if let Some((marker, runs)) = fence {
+            if line.starts_with(marker) {
+                fence = None;
+            } else if runs {
+                lines.push(line);
             }
             continue;
         }
-        if fence.is_some_and(|(_, info)| info.split(',').next() == Some("console")) {
-            lines.push(line);
+        let ticks = line.len() - line.trim_start_matches('`').len();
+        if ticks < 3 {
+            continue;
         }
+        let info = line[ticks..].trim();
+        let mut parts = info.split(',');
+        let lang = parts.next().unwrap_or_default();
+        let runs = info.is_empty() || lang == "console" || lang == "trycmd";
+        assert!(
+            !(runs && parts.any(|p| p == "ignore")),
+            "{}: `{info}` hides its commands from the docs test",
+            page.display()
+        );
+        fence = Some((&line[..ticks], runs));
     }
     lines
 }
 
-/// The command word of every `$ ` line in the page's `console` blocks.
+/// The command word of every `$ ` line in the blocks trycmd runs.
 ///
 /// Panics on an output line holding `\`: trycmd reads `\` in real output
 /// as `/`, so such a line can never match the binary.
 fn commands(page: &Path, text: &str) -> std::collections::BTreeSet<String> {
     let mut names = std::collections::BTreeSet::new();
-    for line in console_lines(text) {
+    for line in run_lines(page, text) {
         if let Some(cmd) = line.strip_prefix("$ ") {
             if let Some(word) = cmd.split_whitespace().find(|w| !w.contains('=')) {
                 names.insert(word.to_string());
@@ -225,6 +246,7 @@ fn help(path: &[String]) -> String {
         .args(path)
         .arg("--help")
         .env("NO_COLOR", "1")
+        .env("COLUMNS", COLUMNS)
         .output()
         .unwrap();
     assert!(out.status.success(), "{path:?} --help failed");
@@ -287,10 +309,46 @@ fn a_wrong_example_fails_and_a_right_one_passes() {
 }
 
 #[test]
-fn commands_lists_console_commands_only() {
-    let page = "```sh\nls\n```\n\n````markdown\n```console\n$ inner\n```\n````\n\n```console\n$ A=1 tundish status\n\n$ gaff check\nok\n```\n";
+fn commands_lists_what_trycmd_runs() {
+    let page = "```sh\nls\n```\n\n````markdown\n```console\n$ inner\n```\n````\n\n```console\n$ A=1 tundish status\n\n$ gaff check\nok\n```\n\n```\n$ bare\n```\n\n```trycmd\n$ tagged\n```\n";
     let names: Vec<String> = commands(Path::new("p.md"), page).into_iter().collect();
-    assert_eq!(names, ["gaff", "tundish"]);
+    assert_eq!(names, ["bare", "gaff", "tagged", "tundish"]);
+}
+
+#[test]
+fn a_page_running_an_unknown_command_fails() {
+    let guard = tempfile::tempdir().unwrap();
+    let scratch = guard.path().canonicalize().unwrap();
+    let wrapper = write_wrapper(&scratch);
+    let page = scratch.join("unknown.md");
+    std::fs::write(&page, "```console\n$ no-such-command-in-path\n```\n").unwrap();
+    let err = std::panic::catch_unwind(|| run_page(&scratch, &wrapper, &page)).unwrap_err();
+    let message = err.downcast_ref::<String>().cloned().unwrap_or_default();
+    assert!(message.contains("not on PATH"), "{message}");
+}
+
+/// The test reads the handler config from its fixture, so the page must
+/// show the same text.
+#[test]
+fn how_to_gaff_shows_the_handler_config_it_tests() {
+    let fixture = std::fs::read_to_string(
+        root().join("tests/docs/how-to-gaff/home/.config/gaff/handlers.yml"),
+    )
+    .unwrap();
+    let page = std::fs::read_to_string(root().join("docs/how-to-gaff.md")).unwrap();
+    assert!(
+        page.contains(&format!("```yaml\n{fixture}```")),
+        "docs/how-to-gaff.md and its handlers.yml fixture differ"
+    );
+}
+
+#[test]
+#[should_panic(expected = "hides its commands")]
+fn an_ignored_console_block_is_refused() {
+    commands(
+        Path::new("p.md"),
+        "```console,ignore\n$ tundish status\n```\n",
+    );
 }
 
 #[test]
