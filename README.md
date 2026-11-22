@@ -27,6 +27,27 @@ npm install -g tundish
 
 Prebuilt binaries are on the [GitHub releases page](https://github.com/cjohnhanson/tundish/releases); see the [installation guide](https://tundish.eng.rip/getting-started/installation/) for every method.
 
+| Package manager | Package | Command |
+| --- | --- | --- |
+| [pip](https://pip.pypa.io/) | [tundish](https://pypi.org/project/tundish/) | `pip install tundish` |
+| [Nix](https://nixos.org/) | [flake](flake.nix) | `nix profile install github:cjohnhanson/tundish` |
+
+### Building from source
+
+tundish is written in Rust. It needs Rust 1.88 or newer and a C compiler
+for the bundled SQLite library. The repository pins a toolchain in
+`rust-toolchain.toml`.
+
+```sh
+git clone https://github.com/cjohnhanson/tundish
+cd tundish
+cargo build --release
+./target/release/tundish --version
+```
+
+The binary is `target/release/tundish`. Put it on `PATH` to run the
+commands below.
+
 ## Example
 
 Publish a review request, then find the delivered item below the `tundish pull` summary.
